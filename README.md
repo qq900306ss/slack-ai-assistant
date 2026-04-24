@@ -2,6 +2,8 @@
 
 A self-hosted, conversational AI assistant for Slack. Ask questions about your workspace history, get summaries, and trace every answer back to the original message.
 
+> 📖 **[中文安裝指南](docs/setup-zh-TW.md)**
+
 ## Features
 
 - **Self-hosted**: All data stays on your machine
