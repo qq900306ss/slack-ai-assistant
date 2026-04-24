@@ -1,0 +1,45 @@
+display_information:
+  name: Slack AI Assistant
+  description: Self-hosted AI assistant for searching and analyzing Slack messages
+  background_color: "#4A154B"
+
+features:
+  bot_user:
+    display_name: AI Assistant
+    always_online: true
+
+oauth_config:
+  scopes:
+    user:
+      # Channel access
+      - channels:history
+      - channels:read
+      - groups:history
+      - groups:read
+      - im:history
+      - im:read
+      - mpim:history
+      - mpim:read
+      # User info
+      - users:read
+      - users:read.email
+      # Reactions
+      - reactions:read
+
+settings:
+  event_subscriptions:
+    user_events:
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+      - reaction_added
+      - reaction_removed
+      - channel_created
+      - channel_rename
+      - user_change
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

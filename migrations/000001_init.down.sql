@@ -1,0 +1,7 @@
+DROP TABLE IF EXISTS ingest_state;
+DROP TABLE IF EXISTS message_reactions;
+DROP TABLE IF EXISTS message_embeddings;
+DROP TABLE IF EXISTS messages;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS channels;
+DROP EXTENSION IF EXISTS vector;
