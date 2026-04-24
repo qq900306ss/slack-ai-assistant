@@ -182,7 +182,7 @@ This app requires a **User Token** with broad read permissions. It can access:
 
 - [x] M1: Ingest pipeline (Slack → Postgres)
 - [x] M2: Embedding pipeline (pgvector + OpenAI)
-- [ ] M3: Retrieval layer (BM25 + vector hybrid)
+- [x] M3: Retrieval layer (BM25 + vector hybrid)
 - [ ] M4: Agent loop + tools (CLI)
 - [ ] M5: Multi-turn conversation state
 - [ ] M6: Web UI
