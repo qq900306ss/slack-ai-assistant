@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: slack_assistant
     ports:
-      - "5432:5432"
+      - "15432:5432"  # Use 15432 externally to avoid conflict
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

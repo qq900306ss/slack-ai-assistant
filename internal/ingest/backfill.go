@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -125,7 +126,7 @@ func (b *Backfiller) backfillChannel(ctx context.Context, ch db.Channel) error {
 	logger.Info("starting channel backfill")
 
 	oldest := time.Now().AddDate(0, 0, -b.cfg.BackfillDays).Unix()
-	oldestTS := slack.JSONTime(oldest)
+	oldestTS := fmt.Sprintf("%d.000000", oldest)
 
 	state, err := b.queries.GetIngestState(ctx, ch.ID)
 	if err != nil {
@@ -147,7 +148,7 @@ func (b *Backfiller) backfillChannel(ctx context.Context, ch db.Channel) error {
 			ChannelID: ch.ID,
 			Cursor:    cursor,
 			Limit:     batchSize,
-			Oldest:    string(oldestTS),
+			Oldest:    oldestTS,
 		}
 
 		if db.TextValid(state.OldestTsFetched) {
