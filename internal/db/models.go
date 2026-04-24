@@ -42,9 +42,9 @@ type Message struct {
 
 type MessageEmbedding struct {
 	MessageID int64              `json:"message_id"`
-	Embedding pgvector.Vector    `json:"embedding"`
 	Model     string             `json:"model"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	Embedding pgvector.Vector    `json:"embedding"`
 }
 
 type MessageReaction struct {

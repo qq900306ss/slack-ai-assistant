@@ -39,7 +39,8 @@ The server will:
 1. Connect to Postgres with pgvector
 2. Run database migrations
 3. Start backfilling your Slack history (last 30 days by default)
-4. Listen for new messages via Socket Mode
+4. Generate embeddings for messages (if `VOYAGE_API_KEY` is set)
+5. Listen for new messages via Socket Mode
 
 ### 4. Verify
 
@@ -59,6 +60,9 @@ SELECT * FROM messages ORDER BY created_at DESC LIMIT 10;
 | `DATABASE_URL` | Yes | - | Postgres connection string |
 | `BACKFILL_DAYS` | No | 30 | Days of history to backfill |
 | `SLACK_EXCLUDE_CHANNELS` | No | - | Comma-separated channel IDs to skip |
+| `VOYAGE_API_KEY` | No | - | Voyage AI API key for embeddings |
+| `EMBEDDING_MODEL` | No | voyage-3-lite | Embedding model (voyage-3-lite or voyage-3) |
+| `EMBEDDING_BATCH_SIZE` | No | 32 | Messages per embedding batch (max 128) |
 
 ## Development
 
@@ -89,7 +93,7 @@ This app requires a **User Token** with broad read permissions. It can access:
 ## Roadmap
 
 - [x] M1: Ingest pipeline (Slack → Postgres)
-- [ ] M2: Embedding pipeline (pgvector)
+- [x] M2: Embedding pipeline (pgvector + Voyage AI)
 - [ ] M3: Retrieval layer (BM25 + vector hybrid)
 - [ ] M4: Agent loop + tools (CLI)
 - [ ] M5: Multi-turn conversation state

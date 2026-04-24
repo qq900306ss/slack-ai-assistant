@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/qq900306ss/slack-ai-assistant/internal/config"
+	"github.com/qq900306ss/slack-ai-assistant/internal/embedding"
 	"github.com/qq900306ss/slack-ai-assistant/internal/ingest"
 	"github.com/qq900306ss/slack-ai-assistant/internal/slack"
 )
@@ -61,6 +62,18 @@ func main() {
 			logger.Error("backfill error", "error", err)
 		}
 	}()
+
+	// Start embedding worker if configured
+	if cfg.VoyageAPIKey != "" {
+		embeddingWorker := embedding.NewWorker(pool, cfg, logger)
+		go func() {
+			if err := embeddingWorker.Run(ctx); err != nil && err != context.Canceled {
+				logger.Error("embedding worker error", "error", err)
+			}
+		}()
+	} else {
+		logger.Warn("VOYAGE_API_KEY not set, embedding worker disabled")
+	}
 
 	// Start Socket Mode client (blocks)
 	smClient := slack.NewSocketModeClient(cfg.SlackAppToken, cfg.SlackUserToken, handler, logger)

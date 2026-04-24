@@ -9,7 +9,24 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pgvector/pgvector-go"
 )
+
+const countMessagesNeedingEmbedding = `-- name: CountMessagesNeedingEmbedding :one
+SELECT COUNT(*) FROM messages m
+LEFT JOIN message_embeddings e ON m.id = e.message_id
+WHERE m.deleted_at IS NULL
+  AND m.text IS NOT NULL
+  AND m.text != ''
+  AND e.message_id IS NULL
+`
+
+func (q *Queries) CountMessagesNeedingEmbedding(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countMessagesNeedingEmbedding)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
 
 const deleteEmbedding = `-- name: DeleteEmbedding :exec
 DELETE FROM message_embeddings WHERE message_id = $1
@@ -139,6 +156,26 @@ func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
 	return i, err
 }
 
+const insertEmbedding = `-- name: InsertEmbedding :exec
+INSERT INTO message_embeddings (message_id, embedding, model)
+VALUES ($1, $2, $3)
+ON CONFLICT (message_id) DO UPDATE SET
+    embedding = EXCLUDED.embedding,
+    model = EXCLUDED.model,
+    created_at = NOW()
+`
+
+type InsertEmbeddingParams struct {
+	MessageID int64           `json:"message_id"`
+	Embedding pgvector.Vector `json:"embedding"`
+	Model     string          `json:"model"`
+}
+
+func (q *Queries) InsertEmbedding(ctx context.Context, arg InsertEmbeddingParams) error {
+	_, err := q.db.Exec(ctx, insertEmbedding, arg.MessageID, arg.Embedding, arg.Model)
+	return err
+}
+
 const insertMessage = `-- name: InsertMessage :one
 INSERT INTO messages (channel_id, slack_ts, thread_ts, user_id, text, raw_json)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -224,6 +261,52 @@ func (q *Queries) ListChannelsNeedingBackfill(ctx context.Context) ([]Channel, e
 			&i.LastIngestedTs,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMessagesNeedingEmbedding = `-- name: ListMessagesNeedingEmbedding :many
+SELECT m.id, m.channel_id, m.slack_ts, m.text, m.thread_ts
+FROM messages m
+LEFT JOIN message_embeddings e ON m.id = e.message_id
+WHERE m.deleted_at IS NULL
+  AND m.text IS NOT NULL
+  AND m.text != ''
+  AND e.message_id IS NULL
+ORDER BY m.created_at ASC
+LIMIT $1
+`
+
+type ListMessagesNeedingEmbeddingRow struct {
+	ID        int64       `json:"id"`
+	ChannelID string      `json:"channel_id"`
+	SlackTs   string      `json:"slack_ts"`
+	Text      pgtype.Text `json:"text"`
+	ThreadTs  pgtype.Text `json:"thread_ts"`
+}
+
+func (q *Queries) ListMessagesNeedingEmbedding(ctx context.Context, limit int32) ([]ListMessagesNeedingEmbeddingRow, error) {
+	rows, err := q.db.Query(ctx, listMessagesNeedingEmbedding, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMessagesNeedingEmbeddingRow{}
+	for rows.Next() {
+		var i ListMessagesNeedingEmbeddingRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelID,
+			&i.SlackTs,
+			&i.Text,
+			&i.ThreadTs,
 		); err != nil {
 			return nil, err
 		}

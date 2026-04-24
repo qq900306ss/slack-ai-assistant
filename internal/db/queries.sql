@@ -80,3 +80,30 @@ ON CONFLICT (channel_id) DO UPDATE SET
 SELECT c.* FROM channels c
 LEFT JOIN ingest_state s ON c.id = s.channel_id
 WHERE c.is_archived = FALSE AND (s.backfill_done IS NULL OR s.backfill_done = FALSE);
+
+-- name: ListMessagesNeedingEmbedding :many
+SELECT m.id, m.channel_id, m.slack_ts, m.text, m.thread_ts
+FROM messages m
+LEFT JOIN message_embeddings e ON m.id = e.message_id
+WHERE m.deleted_at IS NULL
+  AND m.text IS NOT NULL
+  AND m.text != ''
+  AND e.message_id IS NULL
+ORDER BY m.created_at ASC
+LIMIT $1;
+
+-- name: InsertEmbedding :exec
+INSERT INTO message_embeddings (message_id, embedding, model)
+VALUES ($1, $2, $3)
+ON CONFLICT (message_id) DO UPDATE SET
+    embedding = EXCLUDED.embedding,
+    model = EXCLUDED.model,
+    created_at = NOW();
+
+-- name: CountMessagesNeedingEmbedding :one
+SELECT COUNT(*) FROM messages m
+LEFT JOIN message_embeddings e ON m.id = e.message_id
+WHERE m.deleted_at IS NULL
+  AND m.text IS NOT NULL
+  AND m.text != ''
+  AND e.message_id IS NULL;

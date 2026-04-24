@@ -7,11 +7,19 @@ import (
 )
 
 type Config struct {
+	// Slack
 	SlackAppToken      string
 	SlackUserToken     string
-	DatabaseURL        string
-	BackfillDays       int
 	ExcludedChannelIDs []string
+	BackfillDays       int
+
+	// Database
+	DatabaseURL string
+
+	// Embedding
+	VoyageAPIKey       string
+	EmbeddingModel     string
+	EmbeddingBatchSize int
 }
 
 func Load() *Config {
@@ -31,12 +39,27 @@ func Load() *Config {
 		}
 	}
 
+	embeddingModel := os.Getenv("EMBEDDING_MODEL")
+	if embeddingModel == "" {
+		embeddingModel = "voyage-3-lite"
+	}
+
+	embeddingBatchSize := 32
+	if v := os.Getenv("EMBEDDING_BATCH_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 128 {
+			embeddingBatchSize = n
+		}
+	}
+
 	return &Config{
 		SlackAppToken:      os.Getenv("SLACK_APP_TOKEN"),
 		SlackUserToken:     os.Getenv("SLACK_USER_TOKEN"),
 		DatabaseURL:        os.Getenv("DATABASE_URL"),
 		BackfillDays:       backfillDays,
 		ExcludedChannelIDs: excluded,
+		VoyageAPIKey:       os.Getenv("VOYAGE_API_KEY"),
+		EmbeddingModel:     embeddingModel,
+		EmbeddingBatchSize: embeddingBatchSize,
 	}
 }
 
