@@ -5,7 +5,7 @@ A self-hosted, conversational AI assistant for Slack. Ask questions about your w
 ## Features
 
 - **Self-hosted**: All data stays on your machine
-- **BYOK**: Bring your own Anthropic API key
+- **BYOK**: Bring your own API keys
 - **Single-tenant**: One deployment = one Slack workspace
 - **Full history**: Backfills messages and keeps live sync
 - **Traceable**: Every answer links back to original Slack messages
@@ -14,22 +14,84 @@ A self-hosted, conversational AI assistant for Slack. Ask questions about your w
 
 ### 1. Create Slack App
 
-1. Go to [api.slack.com/apps](https://api.slack.com/apps)
-2. Click "Create New App" → "From a manifest"
-3. Paste contents of `slack-app-manifest.yaml`
-4. Install to your workspace
-5. Copy tokens:
-   - **App-Level Token**: Settings → Basic Information → App-Level Tokens → Generate (scope: `connections:write`)
-   - **User Token**: OAuth & Permissions → User OAuth Token (`xoxp-...`)
+#### Option A: Using Manifest (Recommended)
 
-### 2. Configure
+1. Go to [api.slack.com/apps](https://api.slack.com/apps)
+2. Click **Create New App** → **From an app manifest**
+3. Select your workspace
+4. Choose **YAML** tab, paste contents of `slack-app-manifest.yaml`
+5. Click **Create**
+6. Click **Install to Workspace** and authorize
+
+#### Option B: Manual Setup
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps)
+2. Click **Create New App** → **From scratch**
+3. Name it (e.g., "Slack AI Assistant"), select workspace
+
+**Enable Socket Mode:**
+- Settings → **Socket Mode** → Enable
+- Create an app-level token with scope `connections:write`
+- Save the token (`xapp-...`)
+
+**Add User Token Scopes:**
+- **OAuth & Permissions** → **User Token Scopes** → Add these scopes:
+  ```
+  channels:history
+  channels:read
+  groups:history
+  groups:read
+  im:history
+  im:read
+  mpim:history
+  mpim:read
+  users:read
+  reactions:read
+  ```
+
+**Subscribe to Events:**
+- **Event Subscriptions** → Enable Events
+- **Subscribe to events on behalf of users** → Add these events:
+  ```
+  message.channels
+  message.groups
+  message.im
+  message.mpim
+  reaction_added
+  reaction_removed
+  channel_created
+  channel_rename
+  user_change
+  ```
+
+**Install App:**
+- **OAuth & Permissions** → Click **Install to Workspace**
+- Authorize the permissions
+- Copy **User OAuth Token** (`xoxp-...`)
+
+### 2. Get Your Tokens
+
+After installation, you need two tokens:
+
+| Token | Where to Find | Format |
+|-------|---------------|--------|
+| App Token | Settings → Basic Information → App-Level Tokens | `xapp-...` |
+| User Token | OAuth & Permissions → User OAuth Token | `xoxp-...` |
+
+### 3. Configure
 
 ```bash
 cp .env.example .env
-# Edit .env with your tokens
 ```
 
-### 3. Run
+Edit `.env`:
+```bash
+SLACK_APP_TOKEN=xapp-1-xxx...
+SLACK_USER_TOKEN=xoxp-xxx...
+OPENAI_API_KEY=sk-xxx...  # Optional, for embeddings
+```
+
+### 4. Run
 
 ```bash
 docker compose up
@@ -38,17 +100,32 @@ docker compose up
 The server will:
 1. Connect to Postgres with pgvector
 2. Run database migrations
-3. Start backfilling your Slack history (last 30 days by default)
-4. Generate embeddings for messages (if `OPENAI_API_KEY` is set)
-5. Listen for new messages via Socket Mode
+3. Sync channels and users
+4. Start backfilling your Slack history (last 30 days)
+5. Generate embeddings (if `OPENAI_API_KEY` is set)
+6. Listen for new messages via Socket Mode
 
-### 4. Verify
+### 5. Verify
 
-Connect to Postgres and query:
+Connect to Postgres and check:
+
+```bash
+docker compose exec postgres psql -U postgres -d slack_assistant
+```
 
 ```sql
+-- Check data is flowing
+SELECT COUNT(*) FROM channels;
+SELECT COUNT(*) FROM users;
 SELECT COUNT(*) FROM messages;
-SELECT * FROM messages ORDER BY created_at DESC LIMIT 10;
+SELECT COUNT(*) FROM message_embeddings;
+
+-- See recent messages
+SELECT m.text, u.name, m.created_at
+FROM messages m
+LEFT JOIN users u ON m.user_id = u.id
+ORDER BY m.created_at DESC
+LIMIT 10;
 ```
 
 ## Configuration
@@ -63,6 +140,15 @@ SELECT * FROM messages ORDER BY created_at DESC LIMIT 10;
 | `OPENAI_API_KEY` | No | - | OpenAI API key for embeddings |
 | `EMBEDDING_MODEL` | No | text-embedding-3-small | Embedding model |
 | `EMBEDDING_BATCH_SIZE` | No | 32 | Messages per embedding batch |
+
+## Troubleshooting
+
+| Problem | Cause | Solution |
+|---------|-------|----------|
+| `socket mode connection error` | Invalid App Token | Check `SLACK_APP_TOKEN`, ensure Socket Mode is enabled |
+| No messages syncing | Missing scopes | Verify all user token scopes are added |
+| `rate limited` in logs | Normal | App automatically backs off and retries |
+| Embeddings not generating | No API key | Set `OPENAI_API_KEY` in `.env` |
 
 ## Development
 
