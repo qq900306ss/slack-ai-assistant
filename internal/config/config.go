@@ -17,7 +17,7 @@ type Config struct {
 	DatabaseURL string
 
 	// Embedding
-	VoyageAPIKey       string
+	OpenAIAPIKey       string
 	EmbeddingModel     string
 	EmbeddingBatchSize int
 }
@@ -41,12 +41,12 @@ func Load() *Config {
 
 	embeddingModel := os.Getenv("EMBEDDING_MODEL")
 	if embeddingModel == "" {
-		embeddingModel = "voyage-3-lite"
+		embeddingModel = "text-embedding-3-small"
 	}
 
 	embeddingBatchSize := 32
 	if v := os.Getenv("EMBEDDING_BATCH_SIZE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 128 {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 2048 {
 			embeddingBatchSize = n
 		}
 	}
@@ -57,7 +57,7 @@ func Load() *Config {
 		DatabaseURL:        os.Getenv("DATABASE_URL"),
 		BackfillDays:       backfillDays,
 		ExcludedChannelIDs: excluded,
-		VoyageAPIKey:       os.Getenv("VOYAGE_API_KEY"),
+		OpenAIAPIKey:       os.Getenv("OPENAI_API_KEY"),
 		EmbeddingModel:     embeddingModel,
 		EmbeddingBatchSize: embeddingBatchSize,
 	}

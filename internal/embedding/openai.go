@@ -10,18 +10,18 @@ import (
 	"time"
 )
 
-const voyageAPIURL = "https://api.voyageai.com/v1/embeddings"
+const openaiAPIURL = "https://api.openai.com/v1/embeddings"
 
-// VoyageClient handles Voyage AI embedding requests.
-type VoyageClient struct {
+// OpenAIClient handles OpenAI embedding requests.
+type OpenAIClient struct {
 	apiKey     string
 	model      string
 	httpClient *http.Client
 }
 
-// NewVoyageClient creates a new Voyage AI client.
-func NewVoyageClient(apiKey, model string) *VoyageClient {
-	return &VoyageClient{
+// NewOpenAIClient creates a new OpenAI embedding client.
+func NewOpenAIClient(apiKey, model string) *OpenAIClient {
+	return &OpenAIClient{
 		apiKey: apiKey,
 		model:  model,
 		httpClient: &http.Client{
@@ -30,13 +30,12 @@ func NewVoyageClient(apiKey, model string) *VoyageClient {
 	}
 }
 
-type voyageRequest struct {
-	Input     []string `json:"input"`
-	Model     string   `json:"model"`
-	InputType string   `json:"input_type,omitempty"`
+type openaiRequest struct {
+	Input []string `json:"input"`
+	Model string   `json:"model"`
 }
 
-type voyageResponse struct {
+type openaiResponse struct {
 	Object string `json:"object"`
 	Data   []struct {
 		Object    string    `json:"object"`
@@ -45,11 +44,12 @@ type voyageResponse struct {
 	} `json:"data"`
 	Model string `json:"model"`
 	Usage struct {
-		TotalTokens int `json:"total_tokens"`
+		PromptTokens int `json:"prompt_tokens"`
+		TotalTokens  int `json:"total_tokens"`
 	} `json:"usage"`
 }
 
-type voyageError struct {
+type openaiError struct {
 	Error struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
@@ -58,16 +58,14 @@ type voyageError struct {
 }
 
 // Embed generates embeddings for the given texts.
-// Returns embeddings in the same order as input texts.
-func (c *VoyageClient) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+func (c *OpenAIClient) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return nil, nil
 	}
 
-	reqBody := voyageRequest{
-		Input:     texts,
-		Model:     c.model,
-		InputType: "document",
+	reqBody := openaiRequest{
+		Input: texts,
+		Model: c.model,
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -75,7 +73,7 @@ func (c *VoyageClient) Embed(ctx context.Context, texts []string) ([][]float32, 
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", voyageAPIURL, bytes.NewReader(jsonData))
+	req, err := http.NewRequestWithContext(ctx, "POST", openaiAPIURL, bytes.NewReader(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -95,14 +93,14 @@ func (c *VoyageClient) Embed(ctx context.Context, texts []string) ([][]float32, 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		var errResp voyageError
+		var errResp openaiError
 		if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error.Message != "" {
-			return nil, fmt.Errorf("voyage api error (%d): %s", resp.StatusCode, errResp.Error.Message)
+			return nil, fmt.Errorf("openai api error (%d): %s", resp.StatusCode, errResp.Error.Message)
 		}
-		return nil, fmt.Errorf("voyage api error (%d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("openai api error (%d): %s", resp.StatusCode, string(body))
 	}
 
-	var result voyageResponse
+	var result openaiResponse
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("unmarshal response: %w", err)
 	}
@@ -119,6 +117,6 @@ func (c *VoyageClient) Embed(ctx context.Context, texts []string) ([][]float32, 
 }
 
 // Model returns the model name.
-func (c *VoyageClient) Model() string {
+func (c *OpenAIClient) Model() string {
 	return c.model
 }

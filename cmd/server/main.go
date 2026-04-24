@@ -64,7 +64,7 @@ func main() {
 	}()
 
 	// Start embedding worker if configured
-	if cfg.VoyageAPIKey != "" {
+	if cfg.OpenAIAPIKey != "" {
 		embeddingWorker := embedding.NewWorker(pool, cfg, logger)
 		go func() {
 			if err := embeddingWorker.Run(ctx); err != nil && err != context.Canceled {
@@ -72,7 +72,7 @@ func main() {
 			}
 		}()
 	} else {
-		logger.Warn("VOYAGE_API_KEY not set, embedding worker disabled")
+		logger.Warn("OPENAI_API_KEY not set, embedding worker disabled")
 	}
 
 	// Start Socket Mode client (blocks)
