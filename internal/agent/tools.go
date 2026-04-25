@@ -195,6 +195,10 @@ func GetUserMentionsTool() openai.Tool {
 						"type":        "string",
 						"description": "The username or display name to find mentions for (e.g., 'ray', 'kevin')",
 					},
+					"public_only": map[string]any{
+						"type":        "boolean",
+						"description": "If true, only search public channels. If user asks for '公開頻道' or 'public channels', set this to true.",
+					},
 					"limit": map[string]any{
 						"type":        "integer",
 						"description": "Maximum number of results to return (default: 20, max: 50)",
@@ -671,8 +675,9 @@ func formatThreadResults(results []retrieval.SearchResult) string {
 
 func (e *ToolExecutor) getUserMentions(ctx context.Context, input json.RawMessage) (string, error) {
 	var params struct {
-		Username string `json:"username"`
-		Limit    int    `json:"limit"`
+		Username   string `json:"username"`
+		PublicOnly bool   `json:"public_only"`
+		Limit      int    `json:"limit"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return "", err
@@ -692,15 +697,45 @@ func (e *ToolExecutor) getUserMentions(ctx context.Context, input json.RawMessag
 		return "", err
 	}
 
-	var userID string
+	// Find best match: prefer exact match, then display_name contains, then name contains
+	var userID, matchedName string
 	searchPattern := params.Username
+
+	// Pass 1: exact match on display_name or name
 	for _, u := range users {
 		name := db.TextValue(u.Name)
 		displayName := db.TextValue(u.DisplayName)
-		if name == searchPattern || displayName == searchPattern ||
-			containsIgnoreCase(name, searchPattern) || containsIgnoreCase(displayName, searchPattern) {
+		if equalIgnoreCase(displayName, searchPattern) || equalIgnoreCase(name, searchPattern) {
 			userID = u.ID
+			matchedName = displayName
+			if matchedName == "" {
+				matchedName = name
+			}
 			break
+		}
+	}
+
+	// Pass 2: display_name contains (prefer display_name over username)
+	if userID == "" {
+		for _, u := range users {
+			displayName := db.TextValue(u.DisplayName)
+			if displayName != "" && containsIgnoreCase(displayName, searchPattern) {
+				userID = u.ID
+				matchedName = displayName
+				break
+			}
+		}
+	}
+
+	// Pass 3: name contains
+	if userID == "" {
+		for _, u := range users {
+			name := db.TextValue(u.Name)
+			if containsIgnoreCase(name, searchPattern) {
+				userID = u.ID
+				matchedName = name
+				break
+			}
 		}
 	}
 
@@ -709,16 +744,21 @@ func (e *ToolExecutor) getUserMentions(ctx context.Context, input json.RawMessag
 	}
 
 	// Search for mentions using <@USER_ID> format
-	results, err := e.retrieval.GetUserMentions(ctx, userID, limit)
+	results, err := e.retrieval.GetUserMentions(ctx, userID, limit, params.PublicOnly)
 	if err != nil {
 		return "", err
 	}
 
-	if len(results) == 0 {
-		return fmt.Sprintf("No messages found mentioning @%s.", params.Username), nil
+	channelType := ""
+	if params.PublicOnly {
+		channelType = " (僅公開頻道)"
 	}
 
-	return e.formatMentionsWithContext(ctx, results, params.Username), nil
+	if len(results) == 0 {
+		return fmt.Sprintf("No messages found mentioning @%s%s.", matchedName, channelType), nil
+	}
+
+	return e.formatMentionsWithContext(ctx, results, matchedName) + channelType, nil
 }
 
 func containsIgnoreCase(s, substr string) bool {

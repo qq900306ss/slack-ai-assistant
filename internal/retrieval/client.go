@@ -196,9 +196,15 @@ func (c *Client) GetThread(ctx context.Context, channelID, threadTS string) ([]S
 }
 
 // GetUserMentions retrieves messages where a user was @mentioned.
-func (c *Client) GetUserMentions(ctx context.Context, userID string, limit int) ([]SearchResult, error) {
+// If publicOnly is true, only searches public channels.
+func (c *Client) GetUserMentions(ctx context.Context, userID string, limit int, publicOnly bool) ([]SearchResult, error) {
 	// Slack stores mentions as <@USER_ID> in message text
 	mentionPattern := "<@" + userID + ">"
+
+	privateFilter := ""
+	if publicOnly {
+		privateFilter = "AND c.is_private = false"
+	}
 
 	query := `
 		SELECT m.id, m.channel_id, COALESCE(c.name, '') as channel_name,
@@ -213,6 +219,7 @@ func (c *Client) GetUserMentions(ctx context.Context, userID string, limit int) 
 		WHERE m.deleted_at IS NULL
 		  AND m.text LIKE '%' || $1 || '%'
 		  AND m.user_id != $2
+		  ` + privateFilter + `
 		ORDER BY m.slack_ts DESC
 		LIMIT $3
 	`

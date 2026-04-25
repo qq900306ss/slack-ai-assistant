@@ -313,13 +313,14 @@ func (s *Searcher) SubstringSearch(ctx context.Context, queryText string, filter
 		SELECT m.id, m.channel_id, COALESCE(c.name, '') as channel_name,
 		       m.slack_ts, COALESCE(m.thread_ts, '') as thread_ts,
 		       COALESCE(m.user_id, '') as user_id, COALESCE(u.name, '') as user_name,
-		       COALESCE(m.text, '') as text, m.created_at,
+		       COALESCE(m.text, '') as text,
+		       to_timestamp(CAST(split_part(m.slack_ts, '.', 1) AS bigint)) as created_at,
 		       %s as score
 		FROM messages m
 		LEFT JOIN channels c ON m.channel_id = c.id
 		LEFT JOIN users u ON m.user_id = u.id
 		WHERE %s
-		ORDER BY score DESC, m.created_at DESC
+		ORDER BY score DESC, m.slack_ts DESC
 		LIMIT $%d
 	`, scoreExpr, strings.Join(conditions, " AND "), argNum)
 
