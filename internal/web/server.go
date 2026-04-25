@@ -174,7 +174,66 @@ const indexHTML = `<!DOCTYPE html>
             color: #eee;
             height: 100vh;
             display: flex;
+        }
+        .sidebar {
+            width: 260px;
+            background: #16213e;
+            border-right: 1px solid #0f3460;
+            display: flex;
             flex-direction: column;
+            flex-shrink: 0;
+        }
+        .sidebar-header {
+            padding: 16px;
+            border-bottom: 1px solid #0f3460;
+        }
+        .sidebar-header h2 { font-size: 1rem; margin-bottom: 12px; }
+        #new-chat {
+            width: 100%;
+            padding: 10px;
+            background: #e94560;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        #new-chat:hover { background: #ff6b6b; }
+        .history-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+        }
+        .history-item {
+            padding: 10px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 4px;
+            font-size: 0.85rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .history-item:hover { background: #0f3460; }
+        .history-item.active { background: #0f3460; border-left: 3px solid #e94560; }
+        .history-item .title { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+        .history-item .delete {
+            opacity: 0;
+            color: #888;
+            padding: 2px 6px;
+            font-size: 0.8rem;
+        }
+        .history-item:hover .delete { opacity: 1; }
+        .history-item .delete:hover { color: #e94560; }
+        .history-item .date { color: #666; font-size: 0.75rem; margin-left: 8px; }
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
         }
         .header {
             background: #16213e;
@@ -246,51 +305,111 @@ const indexHTML = `<!DOCTYPE html>
         }
         #send:hover { background: #ff6b6b; }
         #send:disabled { background: #555; cursor: not-allowed; }
-        #clear {
-            background: #333;
-            color: #aaa;
-        }
-        #clear:hover { background: #444; }
-        .typing {
-            color: #888;
-            font-style: italic;
+        .typing { color: #888; font-style: italic; }
+        .empty-state {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #555;
+            font-size: 1.1rem;
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>Slack AI Assistant</h1>
-        <p>搜尋並分析你的 Slack 訊息</p>
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h2>對話紀錄</h2>
+            <button id="new-chat">+ 新對話</button>
+        </div>
+        <div class="history-list" id="history"></div>
     </div>
-    <div class="chat-container" id="chat"></div>
-    <div class="input-container">
-        <input type="text" id="input" placeholder="輸入問題，例如：最近有人討論過部署嗎？" autofocus>
-        <button id="send">送出</button>
-        <button id="clear">清除</button>
+    <div class="main">
+        <div class="header">
+            <h1>Slack AI Assistant</h1>
+            <p>搜尋並分析你的 Slack 訊息</p>
+        </div>
+        <div class="chat-container" id="chat">
+            <div class="empty-state">開始新對話或選擇歷史對話</div>
+        </div>
+        <div class="input-container">
+            <input type="text" id="input" placeholder="輸入問題，例如：最近有人討論過部署嗎？" autofocus>
+            <button id="send">送出</button>
+        </div>
     </div>
     <script>
+        const STORAGE_KEY = 'slack-ai-conversations';
         const chat = document.getElementById('chat');
         const input = document.getElementById('input');
         const sendBtn = document.getElementById('send');
-        const clearBtn = document.getElementById('clear');
-        let sessionId = '';
+        const newChatBtn = document.getElementById('new-chat');
+        const historyEl = document.getElementById('history');
+
+        let conversations = loadConversations();
+        let currentId = null;
         let isLoading = false;
 
-        // URL regex for link detection
+        // URL regex
         const urlRegex = /https?:\/\/[^\s]+/g;
 
-        function addMessage(text, type) {
+        function loadConversations() {
+            try {
+                return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+            } catch { return {}; }
+        }
+
+        function saveConversations() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
+        }
+
+        function generateId() {
+            return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+        }
+
+        function renderHistory() {
+            const sorted = Object.entries(conversations)
+                .sort((a, b) => b[1].updatedAt - a[1].updatedAt);
+
+            historyEl.innerHTML = sorted.map(([id, conv]) => {
+                const date = new Date(conv.updatedAt).toLocaleDateString('zh-TW', { month: 'short', day: 'numeric' });
+                const active = id === currentId ? 'active' : '';
+                return '<div class="history-item ' + active + '" data-id="' + id + '">' +
+                    '<span class="title">' + escapeHtml(conv.title || '新對話') + '</span>' +
+                    '<span class="date">' + date + '</span>' +
+                    '<span class="delete" data-id="' + id + '">✕</span>' +
+                '</div>';
+            }).join('');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function renderChat() {
+            chat.innerHTML = '';
+            if (!currentId || !conversations[currentId]) {
+                chat.innerHTML = '<div class="empty-state">開始新對話或選擇歷史對話</div>';
+                return;
+            }
+            const conv = conversations[currentId];
+            conv.messages.forEach(m => addMessage(m.text, m.role, false));
+        }
+
+        function addMessage(text, type, save = true) {
+            // Remove empty state if present
+            const empty = chat.querySelector('.empty-state');
+            if (empty) empty.remove();
+
             const div = document.createElement('div');
             div.className = 'message ' + type;
 
-            // Parse text and create links safely
             const parts = text.split(urlRegex);
             const urls = text.match(urlRegex) || [];
 
             parts.forEach((part, i) => {
-                if (part) {
-                    div.appendChild(document.createTextNode(part));
-                }
+                if (part) div.appendChild(document.createTextNode(part));
                 if (urls[i]) {
                     const a = document.createElement('a');
                     a.href = urls[i];
@@ -303,25 +422,77 @@ const indexHTML = `<!DOCTYPE html>
 
             chat.appendChild(div);
             chat.scrollTop = chat.scrollHeight;
+
+            if (save && currentId && conversations[currentId]) {
+                conversations[currentId].messages.push({ role: type, text });
+                conversations[currentId].updatedAt = Date.now();
+                // Update title from first user message
+                if (type === 'user' && !conversations[currentId].title) {
+                    conversations[currentId].title = text.substring(0, 30) + (text.length > 30 ? '...' : '');
+                }
+                saveConversations();
+                renderHistory();
+            }
             return div;
+        }
+
+        function startNewChat() {
+            const id = generateId();
+            conversations[id] = {
+                id,
+                title: '',
+                messages: [],
+                sessionId: '',
+                createdAt: Date.now(),
+                updatedAt: Date.now()
+            };
+            currentId = id;
+            saveConversations();
+            renderHistory();
+            renderChat();
+            input.focus();
+        }
+
+        function loadChat(id) {
+            if (!conversations[id]) return;
+            currentId = id;
+            renderHistory();
+            renderChat();
+            input.focus();
+        }
+
+        function deleteChat(id) {
+            delete conversations[id];
+            if (currentId === id) {
+                currentId = null;
+                renderChat();
+            }
+            saveConversations();
+            renderHistory();
         }
 
         async function sendMessage() {
             const message = input.value.trim();
             if (!message || isLoading) return;
 
+            // Auto-create conversation if needed
+            if (!currentId) {
+                startNewChat();
+            }
+
             addMessage(message, 'user');
             input.value = '';
             isLoading = true;
             sendBtn.disabled = true;
 
-            const typingDiv = addMessage('正在思考...', 'typing');
+            const typingDiv = addMessage('正在思考...', 'typing', false);
 
             try {
+                const conv = conversations[currentId];
                 const res = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message, session_id: sessionId })
+                    body: JSON.stringify({ message, session_id: conv.sessionId })
                 });
                 const data = await res.json();
                 typingDiv.remove();
@@ -329,7 +500,8 @@ const indexHTML = `<!DOCTYPE html>
                 if (data.error) {
                     addMessage('錯誤: ' + data.error, 'error');
                 } else {
-                    sessionId = data.session_id;
+                    conv.sessionId = data.session_id;
+                    saveConversations();
                     addMessage(data.response, 'assistant');
                 }
             } catch (err) {
@@ -342,26 +514,31 @@ const indexHTML = `<!DOCTYPE html>
             input.focus();
         }
 
-        async function clearChat() {
-            if (sessionId) {
-                await fetch('/api/clear', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ session_id: sessionId })
-                });
-            }
-            sessionId = '';
-            while (chat.firstChild) {
-                chat.removeChild(chat.firstChild);
-            }
-            input.focus();
-        }
-
+        // Event listeners
+        newChatBtn.addEventListener('click', startNewChat);
         sendBtn.addEventListener('click', sendMessage);
-        clearBtn.addEventListener('click', clearChat);
         input.addEventListener('keypress', e => {
             if (e.key === 'Enter') sendMessage();
         });
+
+        historyEl.addEventListener('click', e => {
+            const deleteBtn = e.target.closest('.delete');
+            if (deleteBtn) {
+                e.stopPropagation();
+                if (confirm('確定要刪除這個對話嗎？')) {
+                    deleteChat(deleteBtn.dataset.id);
+                }
+                return;
+            }
+            const item = e.target.closest('.history-item');
+            if (item) loadChat(item.dataset.id);
+        });
+
+        // Initial render
+        renderHistory();
+        // Load most recent conversation if exists
+        const recent = Object.entries(conversations).sort((a, b) => b[1].updatedAt - a[1].updatedAt)[0];
+        if (recent) loadChat(recent[0]);
     </script>
 </body>
 </html>
