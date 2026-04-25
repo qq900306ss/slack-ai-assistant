@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/sashabaranov/go-openai"
@@ -11,6 +12,8 @@ import (
 	"github.com/qq900306ss/slack-ai-assistant/internal/db"
 	"github.com/qq900306ss/slack-ai-assistant/internal/retrieval"
 )
+
+var userMentionRegex = regexp.MustCompile(`<@([A-Z0-9]+)>`)
 
 // Tool definitions for OpenAI
 
@@ -249,6 +252,7 @@ func AllTools() []openai.Tool {
 type ToolExecutor struct {
 	retrieval *retrieval.Client
 	queries   *db.Queries
+	userCache map[string]string // userID -> displayName
 }
 
 // NewToolExecutor creates a new tool executor
@@ -256,7 +260,36 @@ func NewToolExecutor(retrieval *retrieval.Client, queries *db.Queries) *ToolExec
 	return &ToolExecutor{
 		retrieval: retrieval,
 		queries:   queries,
+		userCache: make(map[string]string),
 	}
+}
+
+// resolveUserMentions replaces <@USER_ID> with @username in text
+func (e *ToolExecutor) resolveUserMentions(ctx context.Context, text string) string {
+	// Build cache if empty
+	if len(e.userCache) == 0 {
+		users, err := e.queries.ListUsers(ctx)
+		if err == nil {
+			for _, u := range users {
+				name := db.TextValue(u.DisplayName)
+				if name == "" {
+					name = db.TextValue(u.Name)
+				}
+				if name != "" {
+					e.userCache[u.ID] = name
+				}
+			}
+		}
+	}
+
+	return userMentionRegex.ReplaceAllStringFunc(text, func(match string) string {
+		// Extract user ID from <@USER_ID>
+		userID := match[2 : len(match)-1]
+		if name, ok := e.userCache[userID]; ok {
+			return "@" + name
+		}
+		return match // Keep original if not found
+	})
 }
 
 // Execute runs a tool and returns the result as a string
@@ -828,7 +861,7 @@ func (e *ToolExecutor) formatMentionsWithContext(ctx context.Context, results []
 		out += fmt.Sprintf("連結: %s\n", r.Permalink)
 
 		// Show the mention message first (truncated if needed)
-		mentionText := r.Text
+		mentionText := e.resolveUserMentions(ctx, r.Text)
 		if len(mentionText) > 400 {
 			mentionText = mentionText[:400] + "..."
 		}
@@ -850,7 +883,7 @@ func (e *ToolExecutor) formatMentionsWithContext(ctx context.Context, results []
 						out += "...(更多回覆請點連結查看)\n"
 						break
 					}
-					replyText := msg.Text
+					replyText := e.resolveUserMentions(ctx, msg.Text)
 					if len(replyText) > 150 {
 						replyText = replyText[:150] + "..."
 					}
