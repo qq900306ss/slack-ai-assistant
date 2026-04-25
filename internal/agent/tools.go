@@ -796,7 +796,7 @@ func equalIgnoreCase(a, b string) bool {
 
 func (e *ToolExecutor) formatMentionsWithContext(ctx context.Context, results []retrieval.SearchResult, username string) string {
 	var out string
-	out += fmt.Sprintf("找到 %d 則提及 @%s 的訊息:\n\n", len(results), username)
+	out += fmt.Sprintf("找到 %d 則提及 @%s 的訊息 (按時間由新到舊):\n\n", len(results), username)
 
 	seen := make(map[string]bool)
 	maxWithContext := 10
@@ -822,33 +822,43 @@ func (e *ToolExecutor) formatMentionsWithContext(ctx context.Context, results []
 		seen[threadKey] = true
 		count++
 
-		out += fmt.Sprintf("=== 對話 %d (#%s %s) ===\n", count, r.ChannelName, r.CreatedAt.Format("01/02 15:04"))
+		// Show clear header with who mentioned and when
+		out += fmt.Sprintf("=== %d. #%s (%s) ===\n", count, r.ChannelName, r.CreatedAt.Format("01/02 15:04"))
+		out += fmt.Sprintf("發送者: @%s\n", r.UserName)
 		out += fmt.Sprintf("連結: %s\n", r.Permalink)
 
-		// Try to get thread context
-		var contextMsgs []retrieval.SearchResult
-		var err error
+		// Show the mention message first (truncated if needed)
+		mentionText := r.Text
+		if len(mentionText) > 400 {
+			mentionText = mentionText[:400] + "..."
+		}
+		out += fmt.Sprintf("內容: %s\n", mentionText)
 
+		// Try to get thread replies if exists
 		if r.ThreadTS != "" {
-			contextMsgs, err = e.retrieval.GetThread(ctx, r.ChannelID, r.ThreadTS)
-		}
-
-		if err != nil || len(contextMsgs) <= 1 {
-			contextMsgs, err = e.retrieval.GetSurroundingMessages(ctx, r.ChannelID, r.SlackTS, 5)
-		}
-
-		if err != nil || len(contextMsgs) == 0 {
-			out += fmt.Sprintf("[@%s] %s\n\n", r.UserName, r.Text)
-		} else {
-			for _, msg := range contextMsgs {
-				text := msg.Text
-				if len(text) > 300 {
-					text = text[:300] + "..."
+			contextMsgs, err := e.retrieval.GetThread(ctx, r.ChannelID, r.ThreadTS)
+			if err == nil && len(contextMsgs) > 1 {
+				out += fmt.Sprintf("(共 %d 則回覆)\n", len(contextMsgs)-1)
+				// Show first few replies
+				replyCount := 0
+				for _, msg := range contextMsgs {
+					if msg.SlackTS == r.SlackTS {
+						continue // Skip the original message
+					}
+					replyCount++
+					if replyCount > 3 {
+						out += "...(更多回覆請點連結查看)\n"
+						break
+					}
+					replyText := msg.Text
+					if len(replyText) > 150 {
+						replyText = replyText[:150] + "..."
+					}
+					out += fmt.Sprintf("  └ @%s: %s\n", msg.UserName, replyText)
 				}
-				out += fmt.Sprintf("[@%s %s] %s\n", msg.UserName, msg.CreatedAt.Format("15:04"), text)
 			}
-			out += "\n"
 		}
+		out += "\n"
 	}
 
 	return out

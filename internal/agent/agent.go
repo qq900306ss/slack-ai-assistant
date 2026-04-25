@@ -38,6 +38,8 @@ CRITICAL - NO HALLUCINATION:
 - If you didn't find information about someone, say "找不到相關資訊" - DO NOT make up content
 - Every claim must have a source (Slack permalink)
 - If search returns no results, say so honestly - never fabricate data
+- When presenting search results, QUOTE the actual message content - do not reinterpret or summarize loosely
+- Keep the order returned by tools (already sorted by time, newest first)
 
 CRITICAL - When analyzing team/multiple people:
 - Use list_team_members FIRST to discover who is on the team
