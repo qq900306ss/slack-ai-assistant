@@ -3,6 +3,7 @@ package retrieval
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -192,4 +193,70 @@ func (c *Client) GetThread(ctx context.Context, channelID, threadTS string) ([]S
 	`
 
 	return c.searcher.executeSearch(ctx, query, []any{channelID, threadTS, filter.Limit})
+}
+
+// GetUserMentions retrieves messages where a user was @mentioned.
+func (c *Client) GetUserMentions(ctx context.Context, userID string, limit int) ([]SearchResult, error) {
+	// Slack stores mentions as <@USER_ID> in message text
+	mentionPattern := "<@" + userID + ">"
+
+	query := `
+		SELECT m.id, m.channel_id, COALESCE(c.name, '') as channel_name,
+		       m.slack_ts, COALESCE(m.thread_ts, '') as thread_ts,
+		       COALESCE(m.user_id, '') as user_id, COALESCE(u.name, u.display_name, '') as user_name,
+		       COALESCE(m.text, '') as text,
+		       to_timestamp(CAST(split_part(m.slack_ts, '.', 1) AS bigint)) as created_at,
+		       0.0 as score
+		FROM messages m
+		LEFT JOIN channels c ON m.channel_id = c.id
+		LEFT JOIN users u ON m.user_id = u.id
+		WHERE m.deleted_at IS NULL
+		  AND m.text LIKE '%' || $1 || '%'
+		  AND m.user_id != $2
+		ORDER BY m.slack_ts DESC
+		LIMIT $3
+	`
+
+	return c.searcher.executeSearch(ctx, query, []any{mentionPattern, userID, limit})
+}
+
+// TeamMember represents a team member with activity info.
+type TeamMember struct {
+	ID            string
+	Name          string
+	DisplayName   string
+	LastMessageAt time.Time
+}
+
+// GetActiveTeamMembers returns team members sorted by recent activity.
+func (c *Client) GetActiveTeamMembers(ctx context.Context, limit int) ([]TeamMember, error) {
+	query := `
+		SELECT u.id, COALESCE(u.name, '') as name, COALESCE(u.display_name, '') as display_name,
+		       MAX(to_timestamp(CAST(split_part(m.slack_ts, '.', 1) AS bigint))) as last_message_at
+		FROM users u
+		INNER JOIN messages m ON m.user_id = u.id
+		WHERE u.is_bot = false
+		  AND m.deleted_at IS NULL
+		  AND m.text IS NOT NULL AND m.text != ''
+		GROUP BY u.id, u.name, u.display_name
+		ORDER BY last_message_at DESC
+		LIMIT $1
+	`
+
+	rows, err := c.searcher.pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var members []TeamMember
+	for rows.Next() {
+		var m TeamMember
+		if err := rows.Scan(&m.ID, &m.Name, &m.DisplayName, &m.LastMessageAt); err != nil {
+			return nil, err
+		}
+		members = append(members, m)
+	}
+
+	return members, rows.Err()
 }

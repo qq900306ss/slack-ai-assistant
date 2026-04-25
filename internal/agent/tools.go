@@ -182,6 +182,50 @@ func ExpandContextTool() openai.Tool {
 	}
 }
 
+func GetUserMentionsTool() openai.Tool {
+	return openai.Tool{
+		Type: openai.ToolTypeFunction,
+		Function: &openai.FunctionDefinition{
+			Name:        "get_user_mentions",
+			Description: "Get messages where a specific user was @mentioned (tagged). Use this to find conversations where someone was called out or asked for help. This is different from get_user_messages which shows what the user said.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"username": map[string]any{
+						"type":        "string",
+						"description": "The username or display name to find mentions for (e.g., 'ray', 'kevin')",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum number of results to return (default: 20, max: 50)",
+					},
+				},
+				"required": []string{"username"},
+			},
+		},
+	}
+}
+
+func ListTeamMembersTool() openai.Tool {
+	return openai.Tool{
+		Type: openai.ToolTypeFunction,
+		Function: &openai.FunctionDefinition{
+			Name:        "list_team_members",
+			Description: "List all team members (non-bot users) who have sent messages recently. Use this to discover who is on the team before analyzing multiple people.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum number of members to return (default: 30)",
+					},
+				},
+				"required": []string{},
+			},
+		},
+	}
+}
+
 // AllTools returns all available tools
 func AllTools() []openai.Tool {
 	return []openai.Tool{
@@ -192,6 +236,8 @@ func AllTools() []openai.Tool {
 		GetRecentMessagesTool(),
 		GetUserMessagesTool(),
 		ExpandContextTool(),
+		GetUserMentionsTool(),
+		ListTeamMembersTool(),
 	}
 }
 
@@ -226,6 +272,10 @@ func (e *ToolExecutor) Execute(ctx context.Context, toolName string, input json.
 		return e.getUserMessages(ctx, input)
 	case "expand_context":
 		return e.expandContext(ctx, input)
+	case "get_user_mentions":
+		return e.getUserMentions(ctx, input)
+	case "list_team_members":
+		return e.listTeamMembers(ctx, input)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", toolName)
 	}
@@ -617,4 +667,182 @@ func formatThreadResults(results []retrieval.SearchResult) string {
 	}
 
 	return out
+}
+
+func (e *ToolExecutor) getUserMentions(ctx context.Context, input json.RawMessage) (string, error) {
+	var params struct {
+		Username string `json:"username"`
+		Limit    int    `json:"limit"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return "", err
+	}
+
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	// First, find the user ID from username
+	users, err := e.queries.ListUsers(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	var userID string
+	searchPattern := params.Username
+	for _, u := range users {
+		name := db.TextValue(u.Name)
+		displayName := db.TextValue(u.DisplayName)
+		if name == searchPattern || displayName == searchPattern ||
+			containsIgnoreCase(name, searchPattern) || containsIgnoreCase(displayName, searchPattern) {
+			userID = u.ID
+			break
+		}
+	}
+
+	if userID == "" {
+		return fmt.Sprintf("User '%s' not found.", params.Username), nil
+	}
+
+	// Search for mentions using <@USER_ID> format
+	results, err := e.retrieval.GetUserMentions(ctx, userID, limit)
+	if err != nil {
+		return "", err
+	}
+
+	if len(results) == 0 {
+		return fmt.Sprintf("No messages found mentioning @%s.", params.Username), nil
+	}
+
+	return e.formatMentionsWithContext(ctx, results, params.Username), nil
+}
+
+func containsIgnoreCase(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr ||
+		(len(substr) > 0 && findIgnoreCase(s, substr)))
+}
+
+func findIgnoreCase(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if equalIgnoreCase(s[i:i+len(substr)], substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func equalIgnoreCase(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ca, cb := a[i], b[i]
+		if ca >= 'A' && ca <= 'Z' {
+			ca += 'a' - 'A'
+		}
+		if cb >= 'A' && cb <= 'Z' {
+			cb += 'a' - 'A'
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
+}
+
+func (e *ToolExecutor) formatMentionsWithContext(ctx context.Context, results []retrieval.SearchResult, username string) string {
+	var out string
+	out += fmt.Sprintf("找到 %d 則提及 @%s 的訊息:\n\n", len(results), username)
+
+	seen := make(map[string]bool)
+	maxWithContext := 10
+	if len(results) < maxWithContext {
+		maxWithContext = len(results)
+	}
+
+	count := 0
+	for _, r := range results {
+		if count >= maxWithContext {
+			break
+		}
+
+		// Determine thread key
+		threadKey := r.ChannelID + ":" + r.SlackTS
+		if r.ThreadTS != "" {
+			threadKey = r.ChannelID + ":" + r.ThreadTS
+		}
+
+		if seen[threadKey] {
+			continue
+		}
+		seen[threadKey] = true
+		count++
+
+		out += fmt.Sprintf("=== 對話 %d (#%s %s) ===\n", count, r.ChannelName, r.CreatedAt.Format("01/02 15:04"))
+		out += fmt.Sprintf("連結: %s\n", r.Permalink)
+
+		// Try to get thread context
+		var contextMsgs []retrieval.SearchResult
+		var err error
+
+		if r.ThreadTS != "" {
+			contextMsgs, err = e.retrieval.GetThread(ctx, r.ChannelID, r.ThreadTS)
+		}
+
+		if err != nil || len(contextMsgs) <= 1 {
+			contextMsgs, err = e.retrieval.GetSurroundingMessages(ctx, r.ChannelID, r.SlackTS, 5)
+		}
+
+		if err != nil || len(contextMsgs) == 0 {
+			out += fmt.Sprintf("[@%s] %s\n\n", r.UserName, r.Text)
+		} else {
+			for _, msg := range contextMsgs {
+				text := msg.Text
+				if len(text) > 300 {
+					text = text[:300] + "..."
+				}
+				out += fmt.Sprintf("[@%s %s] %s\n", msg.UserName, msg.CreatedAt.Format("15:04"), text)
+			}
+			out += "\n"
+		}
+	}
+
+	return out
+}
+
+func (e *ToolExecutor) listTeamMembers(ctx context.Context, input json.RawMessage) (string, error) {
+	var params struct {
+		Limit int `json:"limit"`
+	}
+	json.Unmarshal(input, &params)
+
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 30
+	}
+
+	members, err := e.retrieval.GetActiveTeamMembers(ctx, limit)
+	if err != nil {
+		return "", err
+	}
+
+	if len(members) == 0 {
+		return "No active team members found.", nil
+	}
+
+	var out string
+	out += fmt.Sprintf("團隊成員 (依最近活躍度排序, 共 %d 人):\n\n", len(members))
+	for i, m := range members {
+		out += fmt.Sprintf("%d. @%s", i+1, m.Name)
+		if m.DisplayName != "" && m.DisplayName != m.Name {
+			out += fmt.Sprintf(" (%s)", m.DisplayName)
+		}
+		out += fmt.Sprintf(" - 最近訊息: %s\n", m.LastMessageAt.Format("01/02"))
+	}
+
+	return out, nil
 }
