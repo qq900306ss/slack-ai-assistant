@@ -12,9 +12,9 @@ import (
 
 // Client provides a high-level interface for searching messages.
 type Client struct {
-	searcher  *Searcher
-	embedder  *embedding.OpenAIClient
-	logger    *slog.Logger
+	searcher *Searcher
+	embedder *embedding.OpenAIClient
+	logger   *slog.Logger
 }
 
 // NewClient creates a new retrieval client.
@@ -92,6 +92,30 @@ func (c *Client) GetRecentMessages(ctx context.Context, channelID string, limit 
 	`
 
 	return c.searcher.executeSearch(ctx, query, []any{channelID, limit})
+}
+
+// GetUserMessages retrieves recent messages from a specific user.
+func (c *Client) GetUserMessages(ctx context.Context, username string, limit int) ([]SearchResult, error) {
+	// Search pattern for user name matching
+	searchPattern := "%" + username + "%"
+
+	query := `
+		SELECT m.id, m.channel_id, COALESCE(c.name, '') as channel_name,
+		       m.slack_ts, COALESCE(m.thread_ts, '') as thread_ts,
+		       COALESCE(m.user_id, '') as user_id, COALESCE(u.name, u.display_name, '') as user_name,
+		       COALESCE(m.text, '') as text, m.created_at,
+		       0.0 as score
+		FROM messages m
+		LEFT JOIN channels c ON m.channel_id = c.id
+		LEFT JOIN users u ON m.user_id = u.id
+		WHERE m.deleted_at IS NULL
+		  AND m.text IS NOT NULL AND m.text != ''
+		  AND (u.name ILIKE $1 OR u.display_name ILIKE $1 OR u.real_name ILIKE $1)
+		ORDER BY m.created_at DESC
+		LIMIT $2
+	`
+
+	return c.searcher.executeSearch(ctx, query, []any{searchPattern, limit})
 }
 
 // GetThread retrieves all messages in a thread.

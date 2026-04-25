@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/qq900306ss/slack-ai-assistant/internal/agent"
 	"github.com/qq900306ss/slack-ai-assistant/internal/config"
 	"github.com/qq900306ss/slack-ai-assistant/internal/embedding"
 	"github.com/qq900306ss/slack-ai-assistant/internal/ingest"
@@ -54,6 +55,19 @@ func main() {
 
 	// Create event handler
 	handler := ingest.NewHandler(pool, cfg, logger)
+
+	// Create bot handler if OpenAI is configured (enables @mention responses)
+	if cfg.OpenAIAPIKey != "" {
+		botHandler, err := agent.NewBotHandler(pool, slackClient, cfg, logger)
+		if err != nil {
+			logger.Error("failed to create bot handler", "error", err)
+		} else {
+			handler.SetBotResponder(botHandler)
+			logger.Info("bot handler enabled", "bot_id", botHandler.BotID())
+		}
+	} else {
+		logger.Warn("OPENAI_API_KEY not set, bot mentions disabled")
+	}
 
 	// Start backfill in background
 	backfiller := ingest.NewBackfiller(slackClient, pool, cfg, logger)

@@ -12,12 +12,18 @@ import (
 	"github.com/qq900306ss/slack-ai-assistant/internal/db"
 )
 
+// BotResponder handles bot mentions and responds.
+type BotResponder interface {
+	HandleMessage(ctx context.Context, ev *slack.MessageEvent) (handled bool, err error)
+}
+
 // Handler processes Slack events and persists them to the database.
 type Handler struct {
-	queries *db.Queries
-	pool    *pgxpool.Pool
-	cfg     *config.Config
-	logger  *slog.Logger
+	queries      *db.Queries
+	pool         *pgxpool.Pool
+	cfg          *config.Config
+	logger       *slog.Logger
+	botResponder BotResponder
 }
 
 // NewHandler creates an event handler.
@@ -30,10 +36,27 @@ func NewHandler(pool *pgxpool.Pool, cfg *config.Config, logger *slog.Logger) *Ha
 	}
 }
 
+// SetBotResponder sets the bot responder for handling mentions.
+func (h *Handler) SetBotResponder(br BotResponder) {
+	h.botResponder = br
+}
+
 // HandleMessage processes message events (new, edited, deleted).
 func (h *Handler) HandleMessage(ctx context.Context, ev *slack.MessageEvent) error {
 	if h.cfg.IsChannelExcluded(ev.Channel) {
 		return nil
+	}
+
+	// Check for bot mentions first (for new messages only)
+	if h.botResponder != nil && (ev.SubType == "" || ev.SubType == "thread_broadcast") {
+		handled, err := h.botResponder.HandleMessage(ctx, ev)
+		if err != nil {
+			h.logger.Error("bot responder error", "error", err)
+		}
+		if handled {
+			// Still ingest the message, but we've already responded
+			h.logger.Debug("bot handled message", "channel", ev.Channel, "ts", ev.Timestamp)
+		}
 	}
 
 	switch ev.SubType {

@@ -151,6 +151,36 @@ func (c *Client) GetUsers(ctx context.Context) ([]slack.User, error) {
 	return c.api.GetUsersContext(ctx)
 }
 
+// PostMessage sends a message to a channel/thread.
+func (c *Client) PostMessage(ctx context.Context, channelID, text, threadTS string) (string, error) {
+	if err := c.wait(ctx); err != nil {
+		return "", err
+	}
+
+	options := []slack.MsgOption{
+		slack.MsgOptionText(text, false),
+	}
+	if threadTS != "" {
+		options = append(options, slack.MsgOptionTS(threadTS))
+	}
+
+	_, ts, err := c.api.PostMessageContext(ctx, channelID, options...)
+	return ts, err
+}
+
+// GetBotUserID returns the bot's user ID.
+func (c *Client) GetBotUserID(ctx context.Context) (string, error) {
+	if err := c.wait(ctx); err != nil {
+		return "", err
+	}
+
+	resp, err := c.api.AuthTestContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	return resp.UserID, nil
+}
+
 // retryAfter extracts Retry-After header value in seconds.
 func retryAfter(resp *http.Response) time.Duration {
 	if resp == nil {

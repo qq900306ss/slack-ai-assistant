@@ -130,6 +130,30 @@ func GetRecentMessagesTool() openai.Tool {
 	}
 }
 
+func GetUserMessagesTool() openai.Tool {
+	return openai.Tool{
+		Type: openai.ToolTypeFunction,
+		Function: &openai.FunctionDefinition{
+			Name:        "get_user_messages",
+			Description: "Get recent messages from a specific user. Use this to analyze someone's communication style, topics they discuss, or their activity patterns.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"username": map[string]any{
+						"type":        "string",
+						"description": "The username or display name to search for (e.g., 'sherry', 'david')",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum number of messages to return (default: 30, max: 50)",
+					},
+				},
+				"required": []string{"username"},
+			},
+		},
+	}
+}
+
 // AllTools returns all available tools
 func AllTools() []openai.Tool {
 	return []openai.Tool{
@@ -138,6 +162,7 @@ func AllTools() []openai.Tool {
 		ListChannelsTool(),
 		GetUserTool(),
 		GetRecentMessagesTool(),
+		GetUserMessagesTool(),
 	}
 }
 
@@ -168,6 +193,8 @@ func (e *ToolExecutor) Execute(ctx context.Context, toolName string, input json.
 		return e.getUser(ctx, input)
 	case "get_recent_messages":
 		return e.getRecentMessages(ctx, input)
+	case "get_user_messages":
+		return e.getUserMessages(ctx, input)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", toolName)
 	}
@@ -215,7 +242,66 @@ func (e *ToolExecutor) searchMessages(ctx context.Context, input json.RawMessage
 		return "No messages found matching your query.", nil
 	}
 
-	return formatSearchResults(results), nil
+	// Fetch thread context for top results (up to 5)
+	return e.formatSearchResultsWithContext(ctx, results), nil
+}
+
+// formatSearchResultsWithContext fetches thread context for each result and formats them.
+func (e *ToolExecutor) formatSearchResultsWithContext(ctx context.Context, results []retrieval.SearchResult) string {
+	var out string
+	seen := make(map[string]bool) // Track seen threads to avoid duplicates
+
+	maxWithContext := 5
+	if len(results) < maxWithContext {
+		maxWithContext = len(results)
+	}
+
+	for i, r := range results[:maxWithContext] {
+		// Determine thread key
+		threadKey := r.ChannelID + ":" + r.SlackTS
+		if r.ThreadTS != "" {
+			threadKey = r.ChannelID + ":" + r.ThreadTS
+		}
+
+		if seen[threadKey] {
+			continue
+		}
+		seen[threadKey] = true
+
+		out += fmt.Sprintf("=== 對話 %d ===\n", i+1)
+		out += fmt.Sprintf("頻道: #%s\n", r.ChannelName)
+		out += fmt.Sprintf("連結: %s\n\n", r.Permalink)
+
+		// Try to get thread context
+		threadTS := r.ThreadTS
+		if threadTS == "" {
+			threadTS = r.SlackTS
+		}
+
+		threadMsgs, err := e.retrieval.GetThread(ctx, r.ChannelID, threadTS)
+		if err != nil || len(threadMsgs) <= 1 {
+			// No thread or error, just show the single message
+			out += fmt.Sprintf("[@%s %s]\n%s\n\n", r.UserName, r.CreatedAt.Format("01/02 15:04"), r.Text)
+		} else {
+			// Show thread context (up to 10 messages)
+			maxMsgs := 10
+			if len(threadMsgs) < maxMsgs {
+				maxMsgs = len(threadMsgs)
+			}
+			for _, msg := range threadMsgs[:maxMsgs] {
+				text := msg.Text
+				if len(text) > 300 {
+					text = text[:300] + "..."
+				}
+				out += fmt.Sprintf("[@%s %s]\n%s\n\n", msg.UserName, msg.CreatedAt.Format("01/02 15:04"), text)
+			}
+			if len(threadMsgs) > maxMsgs {
+				out += fmt.Sprintf("... 還有 %d 則訊息\n\n", len(threadMsgs)-maxMsgs)
+			}
+		}
+	}
+
+	return out
 }
 
 func (e *ToolExecutor) getThread(ctx context.Context, input json.RawMessage) (string, error) {
@@ -321,6 +407,50 @@ func (e *ToolExecutor) getRecentMessages(ctx context.Context, input json.RawMess
 	}
 
 	return formatRecentMessages(results), nil
+}
+
+func (e *ToolExecutor) getUserMessages(ctx context.Context, input json.RawMessage) (string, error) {
+	var params struct {
+		Username string `json:"username"`
+		Limit    int    `json:"limit"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return "", err
+	}
+
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 30
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	results, err := e.retrieval.GetUserMessages(ctx, params.Username, limit)
+	if err != nil {
+		return "", err
+	}
+
+	if len(results) == 0 {
+		return fmt.Sprintf("No messages found from user matching '%s'.", params.Username), nil
+	}
+
+	return formatUserMessages(results, params.Username), nil
+}
+
+func formatUserMessages(results []retrieval.SearchResult, username string) string {
+	var out string
+	out += fmt.Sprintf("Found %d messages from @%s:\n\n", len(results), username)
+
+	for _, r := range results {
+		text := r.Text
+		if len(text) > 400 {
+			text = text[:400] + "..."
+		}
+		out += fmt.Sprintf("[#%s %s]\n%s\n\n", r.ChannelName, r.CreatedAt.Format("2006-01-02 15:04"), text)
+	}
+
+	return out
 }
 
 func formatRecentMessages(results []retrieval.SearchResult) string {

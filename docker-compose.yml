@@ -34,5 +34,19 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  web:
+    build: .
+    entrypoint: ["/web"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/slack_assistant?sslmode=disable
+      WEB_ADDR: ":8080"
+    ports:
+      - "18080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
 volumes:
   pgdata:
