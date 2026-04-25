@@ -66,7 +66,7 @@ func (s *Searcher) FullTextSearch(ctx context.Context, queryText string, filter 
 	return s.executeSearch(ctx, query, args)
 }
 
-// HybridSearch combines vector and full-text search with RRF (Reciprocal Rank Fusion).
+// HybridSearch combines vector, full-text, and substring search with RRF (Reciprocal Rank Fusion).
 func (s *Searcher) HybridSearch(ctx context.Context, queryText string, queryEmbedding []float32, filter SearchFilter) ([]SearchResult, error) {
 	limit := filter.Limit
 	if limit <= 0 {
@@ -76,7 +76,7 @@ func (s *Searcher) HybridSearch(ctx context.Context, queryText string, queryEmbe
 	// Get more results from each method for better fusion
 	fetchLimit := limit * 3
 
-	// Run both searches
+	// Run vector search
 	vectorFilter := filter
 	vectorFilter.Limit = fetchLimit
 	vectorResults, err := s.VectorSearch(ctx, queryEmbedding, vectorFilter)
@@ -84,6 +84,7 @@ func (s *Searcher) HybridSearch(ctx context.Context, queryText string, queryEmbe
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
 
+	// Run full-text search (works better for English)
 	textFilter := filter
 	textFilter.Limit = fetchLimit
 	textResults, err := s.FullTextSearch(ctx, queryText, textFilter)
@@ -91,8 +92,17 @@ func (s *Searcher) HybridSearch(ctx context.Context, queryText string, queryEmbe
 		return nil, fmt.Errorf("full-text search: %w", err)
 	}
 
-	// Apply RRF fusion
-	return s.rrfFusion(vectorResults, textResults, limit), nil
+	// Run substring search (works better for Chinese and exact matches)
+	substringFilter := filter
+	substringFilter.Limit = fetchLimit
+	substringResults, err := s.SubstringSearch(ctx, queryText, substringFilter)
+	if err != nil {
+		// Non-fatal, continue with other results
+		substringResults = nil
+	}
+
+	// Apply RRF fusion with all three result sets
+	return s.rrfFusionMulti([][]SearchResult{vectorResults, textResults, substringResults}, limit), nil
 }
 
 func (s *Searcher) buildVectorSearchQuery(embedding []float32, filter SearchFilter, limit int) (string, []any) {
@@ -239,25 +249,96 @@ func (s *Searcher) executeSearch(ctx context.Context, query string, args []any) 
 	return results, rows.Err()
 }
 
-// rrfFusion combines results using Reciprocal Rank Fusion.
-// RRF score = sum(1 / (k + rank)) for each result list
-func (s *Searcher) rrfFusion(vectorResults, textResults []SearchResult, limit int) []SearchResult {
+// SubstringSearch performs ILIKE substring matching (works well for Chinese).
+func (s *Searcher) SubstringSearch(ctx context.Context, queryText string, filter SearchFilter) ([]SearchResult, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+
+	// Split query into keywords for better matching
+	keywords := strings.Fields(queryText)
+	if len(keywords) == 0 {
+		return nil, nil
+	}
+
+	args := []any{}
+	var keywordConditions []string
+	for i, kw := range keywords {
+		if len(kw) < 2 {
+			continue // Skip very short keywords
+		}
+		args = append(args, "%"+kw+"%")
+		keywordConditions = append(keywordConditions, fmt.Sprintf("m.text ILIKE $%d", i+1))
+	}
+
+	if len(keywordConditions) == 0 {
+		return nil, nil
+	}
+
+	argNum := len(args)
+
+	var conditions []string
+	conditions = append(conditions, "m.deleted_at IS NULL")
+	conditions = append(conditions, "("+strings.Join(keywordConditions, " OR ")+")")
+
+	if len(filter.ChannelIDs) > 0 {
+		argNum++
+		args = append(args, filter.ChannelIDs)
+		conditions = append(conditions, fmt.Sprintf("m.channel_id = ANY($%d)", argNum))
+	}
+
+	if len(filter.UserIDs) > 0 {
+		argNum++
+		args = append(args, filter.UserIDs)
+		conditions = append(conditions, fmt.Sprintf("m.user_id = ANY($%d)", argNum))
+	}
+
+	argNum++
+	args = append(args, limit)
+
+	// Score by number of keyword matches
+	var scoreExpr string
+	if len(keywordConditions) > 1 {
+		var scoreParts []string
+		for i := range keywordConditions {
+			scoreParts = append(scoreParts, fmt.Sprintf("CASE WHEN m.text ILIKE $%d THEN 1 ELSE 0 END", i+1))
+		}
+		scoreExpr = "(" + strings.Join(scoreParts, " + ") + ")::float"
+	} else {
+		scoreExpr = "1.0"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT m.id, m.channel_id, COALESCE(c.name, '') as channel_name,
+		       m.slack_ts, COALESCE(m.thread_ts, '') as thread_ts,
+		       COALESCE(m.user_id, '') as user_id, COALESCE(u.name, '') as user_name,
+		       COALESCE(m.text, '') as text, m.created_at,
+		       %s as score
+		FROM messages m
+		LEFT JOIN channels c ON m.channel_id = c.id
+		LEFT JOIN users u ON m.user_id = u.id
+		WHERE %s
+		ORDER BY score DESC, m.created_at DESC
+		LIMIT $%d
+	`, scoreExpr, strings.Join(conditions, " AND "), argNum)
+
+	return s.executeSearch(ctx, query, args)
+}
+
+// rrfFusionMulti combines multiple result sets using Reciprocal Rank Fusion.
+func (s *Searcher) rrfFusionMulti(resultSets [][]SearchResult, limit int) []SearchResult {
 	const k = 60 // RRF constant
 
 	scores := make(map[int64]float64)
 	results := make(map[int64]SearchResult)
 
-	// Score vector results
-	for rank, r := range vectorResults {
-		scores[r.MessageID] += 1.0 / float64(k+rank+1)
-		results[r.MessageID] = r
-	}
-
-	// Score text results
-	for rank, r := range textResults {
-		scores[r.MessageID] += 1.0 / float64(k+rank+1)
-		if _, exists := results[r.MessageID]; !exists {
-			results[r.MessageID] = r
+	for _, resultSet := range resultSets {
+		for rank, r := range resultSet {
+			scores[r.MessageID] += 1.0 / float64(k+rank+1)
+			if _, exists := results[r.MessageID]; !exists {
+				results[r.MessageID] = r
+			}
 		}
 	}
 
@@ -292,6 +373,11 @@ func (s *Searcher) rrfFusion(vectorResults, textResults []SearchResult, limit in
 	}
 
 	return final
+}
+
+// rrfFusion combines results using Reciprocal Rank Fusion (legacy, use rrfFusionMulti).
+func (s *Searcher) rrfFusion(vectorResults, textResults []SearchResult, limit int) []SearchResult {
+	return s.rrfFusionMulti([][]SearchResult{vectorResults, textResults}, limit)
 }
 
 func buildPermalink(channelID, slackTS string) string {

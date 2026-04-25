@@ -28,16 +28,17 @@ type IngestState struct {
 }
 
 type Message struct {
-	ID        int64              `json:"id"`
-	ChannelID string             `json:"channel_id"`
-	SlackTs   string             `json:"slack_ts"`
-	ThreadTs  pgtype.Text        `json:"thread_ts"`
-	UserID    pgtype.Text        `json:"user_id"`
-	Text      pgtype.Text        `json:"text"`
-	RawJson   []byte             `json:"raw_json"`
-	DeletedAt pgtype.Timestamptz `json:"deleted_at"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	ID         int64              `json:"id"`
+	ChannelID  string             `json:"channel_id"`
+	SlackTs    string             `json:"slack_ts"`
+	ThreadTs   pgtype.Text        `json:"thread_ts"`
+	UserID     pgtype.Text        `json:"user_id"`
+	Text       pgtype.Text        `json:"text"`
+	RawJson    []byte             `json:"raw_json"`
+	DeletedAt  pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	TextSearch interface{}        `json:"text_search"`
 }
 
 type MessageEmbedding struct {

@@ -49,6 +49,12 @@ WHERE channel_id = $1 AND slack_ts = $2;
 -- name: GetMessageBySlackTS :one
 SELECT * FROM messages WHERE channel_id = $1 AND slack_ts = $2;
 
+-- name: GetNewestMessageTS :one
+SELECT slack_ts FROM messages
+WHERE channel_id = $1 AND deleted_at IS NULL
+ORDER BY slack_ts DESC
+LIMIT 1;
+
 -- name: GetMessageByID :one
 SELECT * FROM messages WHERE id = $1;
 
@@ -107,3 +113,28 @@ WHERE m.deleted_at IS NULL
   AND m.text IS NOT NULL
   AND m.text != ''
   AND e.message_id IS NULL;
+
+-- name: ResetAllIngestStates :exec
+UPDATE ingest_state SET backfill_done = false, oldest_ts_fetched = NULL, newest_ts_fetched = NULL;
+
+-- name: GetOldestMessageTS :one
+SELECT slack_ts FROM messages
+WHERE channel_id = $1 AND deleted_at IS NULL
+ORDER BY slack_ts ASC
+LIMIT 1;
+
+-- name: PurgeChannelMessages :exec
+DELETE FROM messages WHERE channel_id = $1;
+
+-- name: PurgeChannelEmbeddings :exec
+DELETE FROM message_embeddings WHERE message_id IN (
+  SELECT id FROM messages WHERE channel_id = $1
+);
+
+-- name: PurgeChannelIngestState :exec
+DELETE FROM ingest_state WHERE channel_id = $1;
+
+-- name: ListChannelsNeedingExtend :many
+SELECT c.*, s.oldest_ts_fetched FROM channels c
+JOIN ingest_state s ON c.id = s.channel_id
+WHERE c.is_archived = FALSE AND s.backfill_done = TRUE;

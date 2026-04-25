@@ -90,7 +90,7 @@ func (q *Queries) GetIngestState(ctx context.Context, channelID string) (IngestS
 }
 
 const getMessageByID = `-- name: GetMessageByID :one
-SELECT id, channel_id, slack_ts, thread_ts, user_id, text, raw_json, deleted_at, created_at, updated_at FROM messages WHERE id = $1
+SELECT id, channel_id, slack_ts, thread_ts, user_id, text, raw_json, deleted_at, created_at, updated_at, text_search FROM messages WHERE id = $1
 `
 
 func (q *Queries) GetMessageByID(ctx context.Context, id int64) (Message, error) {
@@ -107,12 +107,13 @@ func (q *Queries) GetMessageByID(ctx context.Context, id int64) (Message, error)
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TextSearch,
 	)
 	return i, err
 }
 
 const getMessageBySlackTS = `-- name: GetMessageBySlackTS :one
-SELECT id, channel_id, slack_ts, thread_ts, user_id, text, raw_json, deleted_at, created_at, updated_at FROM messages WHERE channel_id = $1 AND slack_ts = $2
+SELECT id, channel_id, slack_ts, thread_ts, user_id, text, raw_json, deleted_at, created_at, updated_at, text_search FROM messages WHERE channel_id = $1 AND slack_ts = $2
 `
 
 type GetMessageBySlackTSParams struct {
@@ -134,8 +135,37 @@ func (q *Queries) GetMessageBySlackTS(ctx context.Context, arg GetMessageBySlack
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TextSearch,
 	)
 	return i, err
+}
+
+const getNewestMessageTS = `-- name: GetNewestMessageTS :one
+SELECT slack_ts FROM messages
+WHERE channel_id = $1 AND deleted_at IS NULL
+ORDER BY slack_ts DESC
+LIMIT 1
+`
+
+func (q *Queries) GetNewestMessageTS(ctx context.Context, channelID string) (string, error) {
+	row := q.db.QueryRow(ctx, getNewestMessageTS, channelID)
+	var slack_ts string
+	err := row.Scan(&slack_ts)
+	return slack_ts, err
+}
+
+const getOldestMessageTS = `-- name: GetOldestMessageTS :one
+SELECT slack_ts FROM messages
+WHERE channel_id = $1 AND deleted_at IS NULL
+ORDER BY slack_ts ASC
+LIMIT 1
+`
+
+func (q *Queries) GetOldestMessageTS(ctx context.Context, channelID string) (string, error) {
+	row := q.db.QueryRow(ctx, getOldestMessageTS, channelID)
+	var slack_ts string
+	err := row.Scan(&slack_ts)
+	return slack_ts, err
 }
 
 const getUser = `-- name: GetUser :one
@@ -272,6 +302,52 @@ func (q *Queries) ListChannelsNeedingBackfill(ctx context.Context) ([]Channel, e
 	return items, nil
 }
 
+const listChannelsNeedingExtend = `-- name: ListChannelsNeedingExtend :many
+SELECT c.id, c.name, c.is_private, c.is_archived, c.last_ingested_ts, c.created_at, c.updated_at, s.oldest_ts_fetched FROM channels c
+JOIN ingest_state s ON c.id = s.channel_id
+WHERE c.is_archived = FALSE AND s.backfill_done = TRUE
+`
+
+type ListChannelsNeedingExtendRow struct {
+	ID              string             `json:"id"`
+	Name            pgtype.Text        `json:"name"`
+	IsPrivate       bool               `json:"is_private"`
+	IsArchived      bool               `json:"is_archived"`
+	LastIngestedTs  pgtype.Text        `json:"last_ingested_ts"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	OldestTsFetched pgtype.Text        `json:"oldest_ts_fetched"`
+}
+
+func (q *Queries) ListChannelsNeedingExtend(ctx context.Context) ([]ListChannelsNeedingExtendRow, error) {
+	rows, err := q.db.Query(ctx, listChannelsNeedingExtend)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListChannelsNeedingExtendRow{}
+	for rows.Next() {
+		var i ListChannelsNeedingExtendRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.IsPrivate,
+			&i.IsArchived,
+			&i.LastIngestedTs,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.OldestTsFetched,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMessagesNeedingEmbedding = `-- name: ListMessagesNeedingEmbedding :many
 SELECT m.id, m.channel_id, m.slack_ts, m.text, m.thread_ts
 FROM messages m
@@ -316,6 +392,44 @@ func (q *Queries) ListMessagesNeedingEmbedding(ctx context.Context, limit int32)
 		return nil, err
 	}
 	return items, nil
+}
+
+const purgeChannelEmbeddings = `-- name: PurgeChannelEmbeddings :exec
+DELETE FROM message_embeddings WHERE message_id IN (
+  SELECT id FROM messages WHERE channel_id = $1
+)
+`
+
+func (q *Queries) PurgeChannelEmbeddings(ctx context.Context, channelID string) error {
+	_, err := q.db.Exec(ctx, purgeChannelEmbeddings, channelID)
+	return err
+}
+
+const purgeChannelIngestState = `-- name: PurgeChannelIngestState :exec
+DELETE FROM ingest_state WHERE channel_id = $1
+`
+
+func (q *Queries) PurgeChannelIngestState(ctx context.Context, channelID string) error {
+	_, err := q.db.Exec(ctx, purgeChannelIngestState, channelID)
+	return err
+}
+
+const purgeChannelMessages = `-- name: PurgeChannelMessages :exec
+DELETE FROM messages WHERE channel_id = $1
+`
+
+func (q *Queries) PurgeChannelMessages(ctx context.Context, channelID string) error {
+	_, err := q.db.Exec(ctx, purgeChannelMessages, channelID)
+	return err
+}
+
+const resetAllIngestStates = `-- name: ResetAllIngestStates :exec
+UPDATE ingest_state SET backfill_done = false, oldest_ts_fetched = NULL, newest_ts_fetched = NULL
+`
+
+func (q *Queries) ResetAllIngestStates(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, resetAllIngestStates)
+	return err
 }
 
 const softDeleteMessage = `-- name: SoftDeleteMessage :exec

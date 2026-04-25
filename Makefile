@@ -2,9 +2,17 @@
 
 build:
 	go build -o build/server ./cmd/server
+	go build -o build/search ./cmd/search
+	go build -o build/chat ./cmd/chat
 
 run:
 	go run ./cmd/server
+
+chat:
+	go run ./cmd/chat
+
+search:
+	go run ./cmd/search $(ARGS)
 
 test:
 	go test -v ./...

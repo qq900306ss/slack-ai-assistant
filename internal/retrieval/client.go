@@ -73,6 +73,27 @@ func (c *Client) FullTextSearch(ctx context.Context, query string, filter Search
 	return c.searcher.FullTextSearch(ctx, query, filter)
 }
 
+// GetRecentMessages retrieves the most recent messages from a channel.
+func (c *Client) GetRecentMessages(ctx context.Context, channelID string, limit int) ([]SearchResult, error) {
+	query := `
+		SELECT m.id, m.channel_id, COALESCE(c.name, '') as channel_name,
+		       m.slack_ts, COALESCE(m.thread_ts, '') as thread_ts,
+		       COALESCE(m.user_id, '') as user_id, COALESCE(u.name, u.display_name, '') as user_name,
+		       COALESCE(m.text, '') as text, m.created_at,
+		       0.0 as score
+		FROM messages m
+		LEFT JOIN channels c ON m.channel_id = c.id
+		LEFT JOIN users u ON m.user_id = u.id
+		WHERE m.channel_id = $1
+		  AND m.deleted_at IS NULL
+		  AND m.text IS NOT NULL AND m.text != ''
+		ORDER BY m.created_at DESC
+		LIMIT $2
+	`
+
+	return c.searcher.executeSearch(ctx, query, []any{channelID, limit})
+}
+
 // GetThread retrieves all messages in a thread.
 func (c *Client) GetThread(ctx context.Context, channelID, threadTS string) ([]SearchResult, error) {
 	filter := SearchFilter{

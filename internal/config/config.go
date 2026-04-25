@@ -16,10 +16,14 @@ type Config struct {
 	// Database
 	DatabaseURL string
 
-	// Embedding
+	// Embedding + Agent (both use OpenAI)
 	OpenAIAPIKey       string
 	EmbeddingModel     string
 	EmbeddingBatchSize int
+
+	// Reindex
+	ForceReindex        bool
+	PurgeExcludedOnSync bool
 }
 
 func Load() *Config {
@@ -51,15 +55,20 @@ func Load() *Config {
 		}
 	}
 
+	forceReindex := os.Getenv("FORCE_REINDEX") == "true"
+	purgeExcluded := os.Getenv("PURGE_EXCLUDED_ON_SYNC") == "true"
+
 	return &Config{
-		SlackAppToken:      os.Getenv("SLACK_APP_TOKEN"),
-		SlackUserToken:     os.Getenv("SLACK_USER_TOKEN"),
-		DatabaseURL:        os.Getenv("DATABASE_URL"),
-		BackfillDays:       backfillDays,
-		ExcludedChannelIDs: excluded,
-		OpenAIAPIKey:       os.Getenv("OPENAI_API_KEY"),
-		EmbeddingModel:     embeddingModel,
-		EmbeddingBatchSize: embeddingBatchSize,
+		SlackAppToken:       os.Getenv("SLACK_APP_TOKEN"),
+		SlackUserToken:      os.Getenv("SLACK_USER_TOKEN"),
+		DatabaseURL:         os.Getenv("DATABASE_URL"),
+		BackfillDays:        backfillDays,
+		ExcludedChannelIDs:  excluded,
+		OpenAIAPIKey:        os.Getenv("OPENAI_API_KEY"),
+		EmbeddingModel:      embeddingModel,
+		EmbeddingBatchSize:  embeddingBatchSize,
+		ForceReindex:        forceReindex,
+		PurgeExcludedOnSync: purgeExcluded,
 	}
 }
 
