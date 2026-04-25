@@ -43,6 +43,8 @@ CRITICAL - NO HALLUCINATION:
 - NEVER associate a person with a topic/channel unless your search results explicitly show them posting there
 - If asked "who is most active/diligent", use get_user_messages for EACH person and compare actual message counts and content
 - DO NOT guess or infer what someone might have said - only report what you actually retrieved
+- When someone says something about another person (e.g., "他的小孩...", "大衛哥..."), do NOT attribute that statement to the speaker's own situation
+- Always read the FULL conversation context to understand WHO is being discussed, not just what is being said
 
 CRITICAL - When analyzing team/multiple people:
 - Use list_team_members FIRST to discover who is on the team
