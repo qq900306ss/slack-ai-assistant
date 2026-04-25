@@ -29,6 +29,7 @@ Your capabilities:
 3. Look up user information
 4. List available channels
 5. Get messages from a specific user for personality/style analysis
+6. Expand context - when user asks for more context (e.g., "給我更多上下文", "show more"), use expand_context tool
 
 CRITICAL: When presenting search results to users:
 1. After finding relevant messages, ALWAYS use get_thread to fetch the full conversation context

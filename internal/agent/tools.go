@@ -154,6 +154,34 @@ func GetUserMessagesTool() openai.Tool {
 	}
 }
 
+func ExpandContextTool() openai.Tool {
+	return openai.Tool{
+		Type: openai.ToolTypeFunction,
+		Function: &openai.FunctionDefinition{
+			Name:        "expand_context",
+			Description: "Get more surrounding messages around a specific message. Use this when the user wants more context about a conversation or says things like '給我更多上下文', 'show me more', 'expand this'.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"channel_id": map[string]any{
+						"type":        "string",
+						"description": "The Slack channel ID",
+					},
+					"slack_ts": map[string]any{
+						"type":        "string",
+						"description": "The message timestamp to expand context around",
+					},
+					"count": map[string]any{
+						"type":        "integer",
+						"description": "Number of messages before and after to fetch (default: 10, max: 20)",
+					},
+				},
+				"required": []string{"channel_id", "slack_ts"},
+			},
+		},
+	}
+}
+
 // AllTools returns all available tools
 func AllTools() []openai.Tool {
 	return []openai.Tool{
@@ -163,6 +191,7 @@ func AllTools() []openai.Tool {
 		GetUserTool(),
 		GetRecentMessagesTool(),
 		GetUserMessagesTool(),
+		ExpandContextTool(),
 	}
 }
 
@@ -195,6 +224,8 @@ func (e *ToolExecutor) Execute(ctx context.Context, toolName string, input json.
 		return e.getRecentMessages(ctx, input)
 	case "get_user_messages":
 		return e.getUserMessages(ctx, input)
+	case "expand_context":
+		return e.expandContext(ctx, input)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", toolName)
 	}
@@ -493,6 +524,47 @@ func (e *ToolExecutor) formatUserMessagesWithContext(ctx context.Context, result
 	}
 
 	return out
+}
+
+func (e *ToolExecutor) expandContext(ctx context.Context, input json.RawMessage) (string, error) {
+	var params struct {
+		ChannelID string `json:"channel_id"`
+		SlackTS   string `json:"slack_ts"`
+		Count     int    `json:"count"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return "", err
+	}
+
+	count := params.Count
+	if count <= 0 {
+		count = 10
+	}
+	if count > 20 {
+		count = 20
+	}
+
+	results, err := e.retrieval.GetSurroundingMessages(ctx, params.ChannelID, params.SlackTS, count)
+	if err != nil {
+		return "", err
+	}
+
+	if len(results) == 0 {
+		return "No messages found around this timestamp.", nil
+	}
+
+	var out string
+	out += fmt.Sprintf("擴展上下文 (共 %d 則訊息):\n\n", len(results))
+
+	for _, r := range results {
+		text := r.Text
+		if len(text) > 400 {
+			text = text[:400] + "..."
+		}
+		out += fmt.Sprintf("[@%s %s]\n%s\n\n", r.UserName, r.CreatedAt.Format("01/02 15:04"), text)
+	}
+
+	return out, nil
 }
 
 func formatRecentMessages(results []retrieval.SearchResult) string {
