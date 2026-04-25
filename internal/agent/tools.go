@@ -272,31 +272,30 @@ func (e *ToolExecutor) formatSearchResultsWithContext(ctx context.Context, resul
 		out += fmt.Sprintf("頻道: #%s\n", r.ChannelName)
 		out += fmt.Sprintf("連結: %s\n\n", r.Permalink)
 
-		// Try to get thread context
-		threadTS := r.ThreadTS
-		if threadTS == "" {
-			threadTS = r.SlackTS
+		// Try to get context (thread first, then surrounding messages)
+		var contextMsgs []retrieval.SearchResult
+		var err error
+
+		if r.ThreadTS != "" {
+			contextMsgs, err = e.retrieval.GetThread(ctx, r.ChannelID, r.ThreadTS)
 		}
 
-		threadMsgs, err := e.retrieval.GetThread(ctx, r.ChannelID, threadTS)
-		if err != nil || len(threadMsgs) <= 1 {
-			// No thread or error, just show the single message
+		if err != nil || len(contextMsgs) <= 1 {
+			// No thread, get surrounding messages
+			contextMsgs, err = e.retrieval.GetSurroundingMessages(ctx, r.ChannelID, r.SlackTS, 4)
+		}
+
+		if err != nil || len(contextMsgs) == 0 {
+			// Still nothing, show single message
 			out += fmt.Sprintf("[@%s %s]\n%s\n\n", r.UserName, r.CreatedAt.Format("01/02 15:04"), r.Text)
 		} else {
-			// Show thread context (up to 10 messages)
-			maxMsgs := 10
-			if len(threadMsgs) < maxMsgs {
-				maxMsgs = len(threadMsgs)
-			}
-			for _, msg := range threadMsgs[:maxMsgs] {
+			// Show context
+			for _, msg := range contextMsgs {
 				text := msg.Text
 				if len(text) > 300 {
 					text = text[:300] + "..."
 				}
 				out += fmt.Sprintf("[@%s %s]\n%s\n\n", msg.UserName, msg.CreatedAt.Format("01/02 15:04"), text)
-			}
-			if len(threadMsgs) > maxMsgs {
-				out += fmt.Sprintf("... 還有 %d 則訊息\n\n", len(threadMsgs)-maxMsgs)
 			}
 		}
 	}
@@ -435,19 +434,62 @@ func (e *ToolExecutor) getUserMessages(ctx context.Context, input json.RawMessag
 		return fmt.Sprintf("No messages found from user matching '%s'.", params.Username), nil
 	}
 
-	return formatUserMessages(results, params.Username), nil
+	return e.formatUserMessagesWithContext(ctx, results, params.Username), nil
 }
 
-func formatUserMessages(results []retrieval.SearchResult, username string) string {
+// formatUserMessagesWithContext fetches thread context for user messages.
+func (e *ToolExecutor) formatUserMessagesWithContext(ctx context.Context, results []retrieval.SearchResult, username string) string {
 	var out string
-	out += fmt.Sprintf("Found %d messages from @%s:\n\n", len(results), username)
+	out += fmt.Sprintf("Found %d messages from @%s (with context):\n\n", len(results), username)
 
-	for _, r := range results {
-		text := r.Text
-		if len(text) > 400 {
-			text = text[:400] + "..."
+	seen := make(map[string]bool)
+	maxWithContext := 8
+	if len(results) < maxWithContext {
+		maxWithContext = len(results)
+	}
+
+	for i, r := range results[:maxWithContext] {
+		// Determine thread key
+		threadKey := r.ChannelID + ":" + r.SlackTS
+		if r.ThreadTS != "" {
+			threadKey = r.ChannelID + ":" + r.ThreadTS
 		}
-		out += fmt.Sprintf("[#%s %s]\n%s\n\n", r.ChannelName, r.CreatedAt.Format("2006-01-02 15:04"), text)
+
+		if seen[threadKey] {
+			continue
+		}
+		seen[threadKey] = true
+
+		out += fmt.Sprintf("=== 對話 %d (#%s %s) ===\n", i+1, r.ChannelName, r.CreatedAt.Format("01/02 15:04"))
+
+		// Try to get thread context first
+		var contextMsgs []retrieval.SearchResult
+		var err error
+
+		if r.ThreadTS != "" {
+			// Message is part of a thread
+			contextMsgs, err = e.retrieval.GetThread(ctx, r.ChannelID, r.ThreadTS)
+		}
+
+		if err != nil || len(contextMsgs) <= 1 {
+			// No thread or thread fetch failed, get surrounding messages
+			contextMsgs, err = e.retrieval.GetSurroundingMessages(ctx, r.ChannelID, r.SlackTS, 3)
+		}
+
+		if err != nil || len(contextMsgs) == 0 {
+			// Still nothing, just show the single message
+			out += fmt.Sprintf("[@%s] %s\n\n", r.UserName, r.Text)
+		} else {
+			// Show context messages
+			for _, msg := range contextMsgs {
+				text := msg.Text
+				if len(text) > 200 {
+					text = text[:200] + "..."
+				}
+				out += fmt.Sprintf("[@%s] %s\n", msg.UserName, text)
+			}
+			out += "\n"
+		}
 	}
 
 	return out

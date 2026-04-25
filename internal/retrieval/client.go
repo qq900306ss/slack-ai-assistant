@@ -79,7 +79,8 @@ func (c *Client) GetRecentMessages(ctx context.Context, channelID string, limit 
 		SELECT m.id, m.channel_id, COALESCE(c.name, '') as channel_name,
 		       m.slack_ts, COALESCE(m.thread_ts, '') as thread_ts,
 		       COALESCE(m.user_id, '') as user_id, COALESCE(u.name, u.display_name, '') as user_name,
-		       COALESCE(m.text, '') as text, m.created_at,
+		       COALESCE(m.text, '') as text,
+		       to_timestamp(CAST(split_part(m.slack_ts, '.', 1) AS bigint)) as created_at,
 		       0.0 as score
 		FROM messages m
 		LEFT JOIN channels c ON m.channel_id = c.id
@@ -87,7 +88,7 @@ func (c *Client) GetRecentMessages(ctx context.Context, channelID string, limit 
 		WHERE m.channel_id = $1
 		  AND m.deleted_at IS NULL
 		  AND m.text IS NOT NULL AND m.text != ''
-		ORDER BY m.created_at DESC
+		ORDER BY m.slack_ts DESC
 		LIMIT $2
 	`
 
@@ -103,7 +104,8 @@ func (c *Client) GetUserMessages(ctx context.Context, username string, limit int
 		SELECT m.id, m.channel_id, COALESCE(c.name, '') as channel_name,
 		       m.slack_ts, COALESCE(m.thread_ts, '') as thread_ts,
 		       COALESCE(m.user_id, '') as user_id, COALESCE(u.name, u.display_name, '') as user_name,
-		       COALESCE(m.text, '') as text, m.created_at,
+		       COALESCE(m.text, '') as text,
+		       to_timestamp(CAST(split_part(m.slack_ts, '.', 1) AS bigint)) as created_at,
 		       0.0 as score
 		FROM messages m
 		LEFT JOIN channels c ON m.channel_id = c.id
@@ -111,11 +113,58 @@ func (c *Client) GetUserMessages(ctx context.Context, username string, limit int
 		WHERE m.deleted_at IS NULL
 		  AND m.text IS NOT NULL AND m.text != ''
 		  AND (u.name ILIKE $1 OR u.display_name ILIKE $1 OR u.real_name ILIKE $1)
-		ORDER BY m.created_at DESC
+		ORDER BY m.slack_ts DESC
 		LIMIT $2
 	`
 
 	return c.searcher.executeSearch(ctx, query, []any{searchPattern, limit})
+}
+
+// GetSurroundingMessages retrieves messages around a specific timestamp in a channel.
+func (c *Client) GetSurroundingMessages(ctx context.Context, channelID, slackTS string, count int) ([]SearchResult, error) {
+	query := `
+		WITH target AS (
+			SELECT slack_ts FROM messages WHERE channel_id = $1 AND slack_ts = $2
+		)
+		(
+			SELECT m.id, m.channel_id, COALESCE(c.name, '') as channel_name,
+			       m.slack_ts, COALESCE(m.thread_ts, '') as thread_ts,
+			       COALESCE(m.user_id, '') as user_id, COALESCE(u.name, '') as user_name,
+			       COALESCE(m.text, '') as text,
+			       to_timestamp(CAST(split_part(m.slack_ts, '.', 1) AS bigint)) as created_at,
+			       0.0 as score
+			FROM messages m
+			LEFT JOIN channels c ON m.channel_id = c.id
+			LEFT JOIN users u ON m.user_id = u.id
+			WHERE m.channel_id = $1
+			  AND m.slack_ts < $2
+			  AND m.deleted_at IS NULL
+			  AND m.text IS NOT NULL AND m.text != ''
+			ORDER BY m.slack_ts DESC
+			LIMIT $3
+		)
+		UNION ALL
+		(
+			SELECT m.id, m.channel_id, COALESCE(c.name, '') as channel_name,
+			       m.slack_ts, COALESCE(m.thread_ts, '') as thread_ts,
+			       COALESCE(m.user_id, '') as user_id, COALESCE(u.name, '') as user_name,
+			       COALESCE(m.text, '') as text,
+			       to_timestamp(CAST(split_part(m.slack_ts, '.', 1) AS bigint)) as created_at,
+			       0.0 as score
+			FROM messages m
+			LEFT JOIN channels c ON m.channel_id = c.id
+			LEFT JOIN users u ON m.user_id = u.id
+			WHERE m.channel_id = $1
+			  AND m.slack_ts >= $2
+			  AND m.deleted_at IS NULL
+			  AND m.text IS NOT NULL AND m.text != ''
+			ORDER BY m.slack_ts ASC
+			LIMIT $3
+		)
+		ORDER BY slack_ts ASC
+	`
+
+	return c.searcher.executeSearch(ctx, query, []any{channelID, slackTS, count})
 }
 
 // GetThread retrieves all messages in a thread.
