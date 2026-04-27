@@ -456,16 +456,22 @@ func (b *Backfiller) backfillChannel(ctx context.Context, ch db.Channel) error {
 		cursor = resp.ResponseMetaData.NextCursor
 	}
 
-	if err := b.queries.UpsertIngestState(ctx, db.UpsertIngestStateParams{
-		ChannelID:       ch.ID,
-		OldestTsFetched: state.OldestTsFetched,
-		NewestTsFetched: state.NewestTsFetched,
-		BackfillDone:    true,
-	}); err != nil {
-		return err
+	// Only mark as done if we fetched messages OR we have existing state
+	// This prevents marking empty channels as done on transient API failures
+	hasState := db.TextValid(state.OldestTsFetched) || db.TextValid(state.NewestTsFetched)
+	if messageCount > 0 || hasState {
+		if err := b.queries.UpsertIngestState(ctx, db.UpsertIngestStateParams{
+			ChannelID:       ch.ID,
+			OldestTsFetched: state.OldestTsFetched,
+			NewestTsFetched: state.NewestTsFetched,
+			BackfillDone:    true,
+		}); err != nil {
+			return err
+		}
+		logger.Info("channel backfill completed", "messages", messageCount)
+	} else {
+		logger.Warn("channel backfill skipped - no messages fetched", "channel", ch.ID)
 	}
-
-	logger.Info("channel backfill completed", "messages", messageCount)
 	return nil
 }
 
