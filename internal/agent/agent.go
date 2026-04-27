@@ -72,30 +72,49 @@ When answering questions:
 
 If the user asks about something that happened in Slack, use the search_messages tool first, then use get_thread to understand the full context before responding.`
 
-// Agent handles conversations with OpenAI
+// Agent handles conversations with AI backends
 type Agent struct {
-	client   *openai.Client
-	executor *ToolExecutor
-	logger   *slog.Logger
-	model    string
+	// OpenAI backend
+	openaiClient *openai.Client
+	openaiModel  string
+
+	// Anthropic backend
+	anthropicClient *AnthropicClient
+
+	// Shared
+	executor  *ToolExecutor
+	logger    *slog.Logger
+	aiBackend string // "openai" or "anthropic"
 }
 
 // NewAgent creates a new agent
 func NewAgent(pool *pgxpool.Pool, cfg *config.Config, logger *slog.Logger) (*Agent, error) {
-	if cfg.OpenAIAPIKey == "" {
-		return nil, fmt.Errorf("OPENAI_API_KEY is required")
-	}
-
-	client := openai.NewClient(cfg.OpenAIAPIKey)
 	retrievalClient := retrieval.NewClient(pool, cfg, logger)
 	queries := db.New(pool)
 
-	return &Agent{
-		client:   client,
-		executor: NewToolExecutor(retrievalClient, queries),
-		logger:   logger,
-		model:    "gpt-4o-mini",
-	}, nil
+	agent := &Agent{
+		executor:  NewToolExecutor(retrievalClient, queries),
+		logger:    logger,
+		aiBackend: cfg.AIBackend,
+	}
+
+	switch cfg.AIBackend {
+	case "anthropic":
+		if cfg.AnthropicAPIKey == "" {
+			return nil, fmt.Errorf("ANTHROPIC_API_KEY is required for anthropic backend")
+		}
+		agent.anthropicClient = NewAnthropicClient(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+		logger.Info("using Anthropic backend", "model", cfg.AnthropicModel)
+	default:
+		if cfg.OpenAIAPIKey == "" {
+			return nil, fmt.Errorf("OPENAI_API_KEY is required for openai backend")
+		}
+		agent.openaiClient = openai.NewClient(cfg.OpenAIAPIKey)
+		agent.openaiModel = cfg.OpenAIModel
+		logger.Info("using OpenAI backend", "model", cfg.OpenAIModel)
+	}
+
+	return agent, nil
 }
 
 // Message represents a conversation message
@@ -106,6 +125,14 @@ type Message struct {
 
 // Chat processes a user message and returns the assistant's response
 func (a *Agent) Chat(ctx context.Context, history []Message, userMessage string) (string, []Message, error) {
+	if a.aiBackend == "anthropic" {
+		return a.anthropicClient.Chat(ctx, a.executor, history, userMessage)
+	}
+	return a.chatWithOpenAI(ctx, history, userMessage)
+}
+
+// chatWithOpenAI uses OpenAI API with function calling
+func (a *Agent) chatWithOpenAI(ctx context.Context, history []Message, userMessage string) (string, []Message, error) {
 	// Build message history for API
 	messages := []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
@@ -133,8 +160,8 @@ func (a *Agent) Chat(ctx context.Context, history []Message, userMessage string)
 
 	// Agent loop
 	for iterations := 0; iterations < 10; iterations++ {
-		resp, err := a.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-			Model:    a.model,
+		resp, err := a.openaiClient.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+			Model:    a.openaiModel,
 			Messages: messages,
 			Tools:    AllTools(),
 		})

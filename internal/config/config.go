@@ -16,10 +16,16 @@ type Config struct {
 	// Database
 	DatabaseURL string
 
-	// Embedding + Agent (both use OpenAI)
+	// Embedding (uses OpenAI)
 	OpenAIAPIKey       string
 	EmbeddingModel     string
 	EmbeddingBatchSize int
+
+	// Agent AI Backend
+	AIBackend       string // "openai" or "anthropic"
+	OpenAIModel     string // e.g., "gpt-4o-mini", "gpt-4o"
+	AnthropicAPIKey string
+	AnthropicModel  string // e.g., "claude-sonnet-4-20250514"
 
 	// Reindex
 	ForceReindex        bool
@@ -58,6 +64,21 @@ func Load() *Config {
 	forceReindex := os.Getenv("FORCE_REINDEX") == "true"
 	purgeExcluded := os.Getenv("PURGE_EXCLUDED_ON_SYNC") == "true"
 
+	aiBackend := os.Getenv("AI_BACKEND")
+	if aiBackend == "" {
+		aiBackend = "openai" // default
+	}
+
+	openaiModel := os.Getenv("OPENAI_MODEL")
+	if openaiModel == "" {
+		openaiModel = "gpt-4o-mini"
+	}
+
+	anthropicModel := os.Getenv("ANTHROPIC_MODEL")
+	if anthropicModel == "" {
+		anthropicModel = "claude-sonnet-4-20250514"
+	}
+
 	return &Config{
 		SlackAppToken:       os.Getenv("SLACK_APP_TOKEN"),
 		SlackUserToken:      os.Getenv("SLACK_USER_TOKEN"),
@@ -67,6 +88,10 @@ func Load() *Config {
 		OpenAIAPIKey:        os.Getenv("OPENAI_API_KEY"),
 		EmbeddingModel:      embeddingModel,
 		EmbeddingBatchSize:  embeddingBatchSize,
+		AIBackend:           aiBackend,
+		OpenAIModel:         openaiModel,
+		AnthropicAPIKey:     os.Getenv("ANTHROPIC_API_KEY"),
+		AnthropicModel:      anthropicModel,
 		ForceReindex:        forceReindex,
 		PurgeExcludedOnSync: purgeExcluded,
 	}
